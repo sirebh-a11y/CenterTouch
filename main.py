@@ -1,12 +1,13 @@
 import sys
 import math
 import traceback
+from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QTextCursor
+from PySide6.QtGui import QColor, QTextCursor, QPixmap, QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QTextEdit, QFileDialog, QTableWidget,
@@ -67,6 +68,11 @@ class QualityReport:
 # ============================================================
 
 EPS = 1e-10
+ASSET_DIR = Path(__file__).resolve().parent
+
+
+def asset_path(filename: str) -> Path:
+    return ASSET_DIR / filename
 
 
 def normalize(v: np.ndarray) -> np.ndarray:
@@ -609,7 +615,10 @@ class ThresholdsWidget(QGroupBox):
 class MeltioFrameTool(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Meltio Space - Tool di centraggio CAD → reale")
+        window_icon = QIcon(str(asset_path("logo777.ico")))
+        if not window_icon.isNull():
+            self.setWindowIcon(window_icon)
+        self.setWindowTitle("Tool di centraggio reale -> Meltio Space")
         self.resize(1300, 900)
 
         main_layout = QVBoxLayout(self)
@@ -623,9 +632,20 @@ class MeltioFrameTool(QWidget):
         scroll_area.setWidget(content)
         content_layout = QVBoxLayout(content)
 
+        title_row = QHBoxLayout()
+        logo_label = QLabel()
+        logo_path = asset_path("logo777_black on transparent.png")
+        logo_pixmap = QPixmap(str(logo_path))
+        if not logo_pixmap.isNull():
+            logo_label.setPixmap(
+                logo_pixmap.scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
         title = QLabel("Tool -BASIC- per centraggio CAD → reale")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        content_layout.addWidget(title)
+        title_row.addWidget(logo_label)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        content_layout.addLayout(title_row)
 
         instructions = QLabel(
             "Riferimenti metrologici usati dal software:\n"
@@ -914,6 +934,10 @@ class MeltioFrameTool(QWidget):
             self.output.setPlainText(report)
             self.colorize_output_status(quality.status)
 
+        except ValueError as e:
+            msg = "ERRORE DI INPUT\n\n" + str(e)
+            self.output.setPlainText(msg)
+            self.colorize_output_status("CRITICAL")
         except Exception as e:
             msg = "ERRORE DI CALCOLO\n\n" + str(e) + "\n\n" + traceback.format_exc()
             self.output.setPlainText(msg)
@@ -1047,6 +1071,9 @@ class MeltioFrameTool(QWidget):
 
 def main():
     app = QApplication(sys.argv)
+    app_icon = QIcon(str(asset_path("logo777.ico")))
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
     win = MeltioFrameTool()
     win.show()
     sys.exit(app.exec())
