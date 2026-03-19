@@ -76,6 +76,16 @@ def normalize(v: np.ndarray) -> np.ndarray:
     return v / n
 
 
+def orient_real_plane_normal(normal: np.ndarray, force_flip: bool = False) -> np.ndarray:
+    n = normalize(normal.copy())
+    if force_flip:
+        n = -n
+    else:
+        if n[2] < 0:
+            n = -n
+    return n
+
+
 def ensure_right_handed(X: np.ndarray, Y: np.ndarray, Z: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     R = np.column_stack((X, Y, Z))
     if np.linalg.det(R) < 0:
@@ -336,29 +346,76 @@ def set_table_headers(table: QTableWidget):
     table.horizontalHeader().setStretchLastSection(True)
 
 
+def set_cell_color(item: QTableWidgetItem, valid: bool):
+    if valid:
+        item.setBackground(QColor("white"))
+    else:
+        item.setBackground(QColor(255, 100, 100))
+
+
+def parse_float_input(value: str) -> float:
+    return float(value.strip().replace(",", "."))
+
+
+def validate_cell(item: Optional[QTableWidgetItem]):
+    if item is None:
+        return
+
+    txt = item.text().strip() if item.text() is not None else ""
+    if txt == "":
+        set_cell_color(item, True)
+        return
+
+    try:
+        parse_float_input(txt)
+        set_cell_color(item, True)
+    except Exception:
+        set_cell_color(item, False)
+
+
 def read_points_from_table(table: QTableWidget) -> np.ndarray:
     pts = []
+    flag_error = False
     for r in range(table.rowCount()):
-        vals = []
+        row_values = []
         empty = True
         for c in range(3):
             item = table.item(r, c)
+            if item is None:
+                item = QTableWidgetItem("")
+                table.setItem(r, c, item)
+
             txt = item.text().strip() if item and item.text() is not None else ""
             if txt != "":
                 empty = False
-            vals.append(txt)
+            if txt == "":
+                set_cell_color(item, False)
+                flag_error = True
+                row_values.append(None)
+                continue
+
+            try:
+                value = parse_float_input(txt)
+                set_cell_color(item, True)
+                row_values.append(value)
+            except Exception:
+                set_cell_color(item, False)
+                flag_error = True
+                row_values.append(None)
         if empty:
             continue
-        try:
-            pts.append([float(vals[0]), float(vals[1]), float(vals[2])])
-        except Exception:
-            raise ValueError(f"Valore non numerico nella riga {r+1}.")
+        if any(value is None for value in row_values):
+            continue
+        pts.append(row_values)
+    if flag_error:
+        raise ValueError("Errore: celle non valide evidenziate in rosso")
     return np.asarray(pts, dtype=float)
 
 
 def create_empty_table(rows: int = 5) -> QTableWidget:
     table = QTableWidget(rows, 3)
     set_table_headers(table)
+    table.itemChanged.connect(validate_cell)
     return table
 
 
@@ -562,7 +619,7 @@ class MeltioFrameTool(QWidget):
         scroll_area.setWidget(content)
         content_layout = QVBoxLayout(content)
 
-        title = QLabel("Tool PRO per centraggio CAD → reale")
+        title = QLabel("Tool -BASIC- per centraggio CAD → reale")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         content_layout.addWidget(title)
 
@@ -681,9 +738,10 @@ class MeltioFrameTool(QWidget):
             hole2 = self.hole2_widget.get_result()
             plane = self.plane_widget.get_result()
 
-            Zr = plane.normal.copy()
-            if self.flip_real_z.isChecked():
-                Zr = -Zr
+            Zr = orient_real_plane_normal(
+                plane.normal,
+                force_flip=self.flip_real_z.isChecked()
+            )
 
             # Proiezioni reali
             F1r_proj = project_point_on_plane(hole1.center_raw, plane.point, Zr)
