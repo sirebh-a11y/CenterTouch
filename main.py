@@ -377,17 +377,23 @@ def read_points_from_table(table: QTableWidget) -> np.ndarray:
     pts = []
     flag_error = False
     for r in range(table.rowCount()):
-        row_values = []
-        empty = True
+        items = []
+        texts = []
         for c in range(3):
             item = table.item(r, c)
             if item is None:
                 item = QTableWidgetItem("")
                 table.setItem(r, c, item)
+            items.append(item)
+            texts.append(item.text().strip() if item.text() is not None else "")
 
-            txt = item.text().strip() if item and item.text() is not None else ""
-            if txt != "":
-                empty = False
+        if all(txt == "" for txt in texts):
+            for item in items:
+                set_cell_color(item, True)
+            continue
+
+        row_values = []
+        for item, txt in zip(items, texts):
             if txt == "":
                 set_cell_color(item, False)
                 flag_error = True
@@ -402,8 +408,6 @@ def read_points_from_table(table: QTableWidget) -> np.ndarray:
                 set_cell_color(item, False)
                 flag_error = True
                 row_values.append(None)
-        if empty:
-            continue
         if any(value is None for value in row_values):
             continue
         pts.append(row_values)
