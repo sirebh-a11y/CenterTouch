@@ -650,6 +650,12 @@ class MeltioFrameTool(QWidget):
 
         input_layout = QVBoxLayout(input_tab)
 
+        import_row = QHBoxLayout()
+        self.import_btn = QPushButton("Import TXT")
+        import_row.addWidget(self.import_btn)
+        import_row.addStretch(1)
+        input_layout.addLayout(import_row)
+
         real_group = QGroupBox("Dati reali da tastatura")
         real_layout = QVBoxLayout(real_group)
         input_layout.addWidget(real_group)
@@ -729,6 +735,7 @@ class MeltioFrameTool(QWidget):
         self.output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         results_layout.addWidget(self.output)
 
+        self.import_btn.clicked.connect(self.import_txt)
         self.calc_btn.clicked.connect(self.calculate_all)
         self.save_btn.clicked.connect(self.save_txt)
         self.clear_btn.clicked.connect(self.output.clear)
@@ -736,6 +743,114 @@ class MeltioFrameTool(QWidget):
     # ---------------------------
     # Core calculation pipeline
     # ---------------------------
+    def import_txt(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Apri file TXT", "", "Text Files (*.txt)")
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            self.parse_txt_lines(lines)
+        except Exception as e:
+            QMessageBox.critical(self, "Import TXT", str(e))
+
+    def parse_txt_lines(self, lines):
+        mode = None
+
+        hole1_pts = []
+        hole2_pts = []
+        plane_pts = []
+        hole1_center = None
+        hole2_center = None
+
+        for raw_line in lines:
+            line = raw_line.strip()
+
+            if not line:
+                continue
+
+            upper_line = line.upper()
+            if line.startswith("#") or upper_line in {
+                "FORO 1 - PUNTI",
+                "FORO 2 - PUNTI",
+                "FORO 1 - CENTRO",
+                "FORO 2 - CENTRO",
+                "PIANO Z",
+                "CAD NOMINALE",
+            }:
+                if "FORO 1 - PUNTI" in upper_line:
+                    mode = "hole1_pts"
+                elif "FORO 2 - PUNTI" in upper_line:
+                    mode = "hole2_pts"
+                elif "FORO 1 - CENTRO" in upper_line:
+                    mode = "hole1_center"
+                elif "FORO 2 - CENTRO" in upper_line:
+                    mode = "hole2_center"
+                elif "PIANO Z" in upper_line:
+                    mode = "plane"
+                elif "CAD NOMINALE" in upper_line:
+                    mode = "cad"
+                continue
+
+            if "=" in line:
+                key, val = line.split("=", 1)
+                nums = [parse_float_input(x) for x in val.strip().split()]
+                if key.strip().upper() == "F1":
+                    self.nom_hole1.x.setValue(nums[0])
+                    self.nom_hole1.y.setValue(nums[1])
+                    self.nom_hole1.z.setValue(nums[2])
+                elif key.strip().upper() == "F2":
+                    self.nom_hole2.x.setValue(nums[0])
+                    self.nom_hole2.y.setValue(nums[1])
+                    self.nom_hole2.z.setValue(nums[2])
+                elif key.strip().upper() == "Z":
+                    self.nom_plane_height.setValue(nums[0])
+                continue
+
+            parts = line.split()
+
+            if len(parts) == 3:
+                vals = [parse_float_input(p) for p in parts]
+
+                if mode == "hole1_pts":
+                    hole1_pts.append(vals)
+                elif mode == "hole2_pts":
+                    hole2_pts.append(vals)
+                elif mode == "plane":
+                    plane_pts.append(vals)
+                elif mode == "hole1_center":
+                    hole1_center = vals
+                elif mode == "hole2_center":
+                    hole2_center = vals
+
+        self.fill_table(self.plane_widget.table, plane_pts)
+
+        if hole1_pts:
+            self.hole1_widget.mode.setCurrentIndex(0)
+            self.fill_table(self.hole1_widget.points_table, hole1_pts)
+        elif hole1_center:
+            self.hole1_widget.mode.setCurrentIndex(1)
+            self.set_center(self.hole1_widget.center_row, hole1_center)
+
+        if hole2_pts:
+            self.hole2_widget.mode.setCurrentIndex(0)
+            self.fill_table(self.hole2_widget.points_table, hole2_pts)
+        elif hole2_center:
+            self.hole2_widget.mode.setCurrentIndex(1)
+            self.set_center(self.hole2_widget.center_row, hole2_center)
+
+    def fill_table(self, table, points):
+        table.setRowCount(len(points))
+        for r, p in enumerate(points):
+            for c in range(3):
+                table.setItem(r, c, QTableWidgetItem(str(p[c])))
+
+    def set_center(self, widget, vals):
+        widget.x.setValue(vals[0])
+        widget.y.setValue(vals[1])
+        widget.z.setValue(vals[2])
+
     def calculate_all(self):
         try:
             hole1 = self.hole1_widget.get_result()
