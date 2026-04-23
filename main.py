@@ -242,6 +242,81 @@ def rotation_matrix_to_euler_zyx_deg(R: np.ndarray) -> Tuple[float, float, float
     return math.degrees(rz), math.degrees(ry), math.degrees(rx)
 
 
+def rotation_matrix_to_euler_xyz_deg(R: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Restituisce angoli XYZ in gradi: (Rx, Ry, Rz)
+    """
+    sy = max(-1.0, min(1.0, R[0, 2]))
+    ry = math.asin(sy)
+    cy = math.cos(ry)
+
+    if abs(cy) > 1e-8:
+        rx = math.atan2(-R[1, 2], R[2, 2])
+        rz = math.atan2(-R[0, 1], R[0, 0])
+    else:
+        rx = math.atan2(R[2, 1], R[1, 1])
+        rz = 0.0
+
+    return math.degrees(rx), math.degrees(ry), math.degrees(rz)
+
+
+def rotation_matrix_to_euler_xzy_deg(R: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Restituisce angoli XZY in gradi: (Rx, Rz, Ry)
+    """
+    sz = max(-1.0, min(1.0, -R[0, 1]))
+    rz = math.asin(sz)
+    cz = math.cos(rz)
+
+    if abs(cz) > 1e-8:
+        rx = math.atan2(R[2, 1], R[1, 1])
+        ry = math.atan2(R[0, 2], R[0, 0])
+    else:
+        rx = math.atan2(-R[1, 2], R[2, 2])
+        ry = 0.0
+
+    return math.degrees(rx), math.degrees(rz), math.degrees(ry)
+
+
+def rotation_matrix_to_euler_zxy_deg(R: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Restituisce angoli ZXY in gradi: (Rz, Rx, Ry)
+    """
+    sx = max(-1.0, min(1.0, R[2, 1]))
+    rx = math.asin(sx)
+    cx = math.cos(rx)
+
+    if abs(cx) > 1e-8:
+        ry = math.atan2(-R[2, 0], R[2, 2])
+        rz = math.atan2(-R[0, 1], R[1, 1])
+    else:
+        ry = math.atan2(R[0, 2], R[0, 0])
+        rz = 0.0
+
+    return math.degrees(rz), math.degrees(rx), math.degrees(ry)
+
+
+def build_rotation_output(R: np.ndarray, mode: str) -> Tuple[str, List[Tuple[str, float]]]:
+    if mode == "xyz":
+        rx, ry, rz = rotation_matrix_to_euler_xyz_deg(R)
+        return "XYZ", [("X", rx), ("Y", ry), ("Z", rz)]
+
+    if mode == "swap_xz":
+        rz, ry, rx = rotation_matrix_to_euler_zyx_deg(R)
+        return "SWAP_XZ_OUTPUT", [("Z", rx), ("Y", ry), ("X", rz)]
+
+    if mode == "xzy":
+        rx, rz, ry = rotation_matrix_to_euler_xzy_deg(R)
+        return "XZY", [("X", rx), ("Z", rz), ("Y", ry)]
+
+    if mode == "zxy":
+        rz, rx, ry = rotation_matrix_to_euler_zxy_deg(R)
+        return "ZXY", [("Z", rz), ("X", rx), ("Y", ry)]
+
+    rz, ry, rx = rotation_matrix_to_euler_zyx_deg(R)
+    return "ZYX", [("Z", rz), ("Y", ry), ("X", rx)]
+
+
 def homogeneous_from_rt(R: np.ndarray, t: np.ndarray) -> np.ndarray:
     T = np.eye(4)
     T[:3, :3] = R
@@ -780,6 +855,27 @@ class MeltioFrameTool(QWidget):
         btn_row.addStretch(1)
         results_layout.addLayout(btn_row)
 
+        rotation_output_group = QGroupBox("Output rotazioni")
+        rotation_output_layout = QGridLayout(rotation_output_group)
+        results_layout.addWidget(rotation_output_group)
+
+        rotation_output_info = QLabel(
+            "Cambia solo la rappresentazione finale delle rotazioni.\n"
+            "Matrice R e traslazione restano invariate."
+        )
+        rotation_output_info.setWordWrap(True)
+        rotation_output_info.setStyleSheet("color: #333;")
+        rotation_output_layout.addWidget(rotation_output_info, 0, 0, 1, 2)
+
+        self.rotation_output_mode = QComboBox()
+        self.rotation_output_mode.addItem("ZYX (attuale)", "zyx")
+        self.rotation_output_mode.addItem("XYZ", "xyz")
+        self.rotation_output_mode.addItem("Swap X/Z output", "swap_xz")
+        self.rotation_output_mode.addItem("XZY (avanzata)", "xzy")
+        self.rotation_output_mode.addItem("ZXY (avanzata)", "zxy")
+        rotation_output_layout.addWidget(QLabel("Convenzione output"), 1, 0)
+        rotation_output_layout.addWidget(self.rotation_output_mode, 1, 1)
+
         self.output = QTextEdit()
         self.output.setLineWrapMode(QTextEdit.NoWrap)
         self.output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -912,6 +1008,9 @@ class MeltioFrameTool(QWidget):
 
         return sign * radius * normalize(plane_normal), diameter, radius, sign
 
+    def get_rotation_output_mode(self) -> str:
+        return self.rotation_output_mode.currentData() or "zyx"
+
     def calculate_all(self):
         try:
             hole1 = self.hole1_widget.get_result()
@@ -949,8 +1048,7 @@ class MeltioFrameTool(QWidget):
             R = real_frame.R @ nominal_frame.R.T
             t = real_frame.origin - R @ nominal_frame.origin
             T = homogeneous_from_rt(R, t)
-
-            rz, ry, rx = rotation_matrix_to_euler_zyx_deg(R)
+            rotation_mode_label, rotation_lines = build_rotation_output(R, self.get_rotation_output_mode())
 
             quality = build_quality_report(
                 hole1=hole1,
@@ -973,7 +1071,7 @@ class MeltioFrameTool(QWidget):
                 F1n_proj, F2n_proj,
                 real_frame, nominal_frame,
                 R, t, T,
-                rz, ry, rx,
+                rotation_mode_label, rotation_lines,
                 quality
             )
             self.output.setPlainText(report)
@@ -1007,7 +1105,8 @@ class MeltioFrameTool(QWidget):
         R: np.ndarray,
         t: np.ndarray,
         T: np.ndarray,
-        rz: float, ry: float, rx: float,
+        rotation_mode_label: str,
+        rotation_lines: List[Tuple[str, float]],
         quality: QualityReport
     ) -> str:
         lines = []
@@ -1021,10 +1120,9 @@ class MeltioFrameTool(QWidget):
         lines.append(f"Y = {t[1]:.6f}")
         lines.append(f"Z = {t[2]:.6f}")
         lines.append("")
-        lines.append("ROTATE")
-        lines.append(f"Z = {rz:.6f}")
-        lines.append(f"Y = {ry:.6f}")
-        lines.append(f"X = {rx:.6f}")
+        lines.append(f"ROTATE ({rotation_mode_label})")
+        for axis_label, angle_value in rotation_lines:
+            lines.append(f"{axis_label} = {angle_value:.6f}")
         lines.append("")
 
         lines.append("REAL DATA")
