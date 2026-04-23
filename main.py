@@ -732,6 +732,36 @@ class MeltioFrameTool(QWidget):
         opt_layout.addWidget(self.flip_nominal_z)
         opt_layout.addStretch(1)
 
+        plane_comp_group = QGroupBox("Compensazione piano tastato")
+        plane_comp_layout = QGridLayout(plane_comp_group)
+        input_layout.addWidget(plane_comp_group)
+
+        plane_comp_info = QLabel(
+            "Applica la compensazione del raggio sfera solo al piano reale.\n"
+            "I fori non vengono compensati: il centro resta corretto, cambia solo il raggio misurato.\n"
+            "Scegli il verso in cui si trova il piano reale rispetto a Z reale."
+        )
+        plane_comp_info.setWordWrap(True)
+        plane_comp_info.setStyleSheet("color: #333;")
+        plane_comp_layout.addWidget(plane_comp_info, 0, 0, 1, 2)
+
+        self.plane_comp_mode = QComboBox()
+        self.plane_comp_mode.addItems([
+            "Nessuna",
+            "Piano reale nel verso di Z reale",
+            "Piano reale nel verso opposto a Z reale",
+        ])
+        plane_comp_layout.addWidget(QLabel("Compensazione"), 1, 0)
+        plane_comp_layout.addWidget(self.plane_comp_mode, 1, 1)
+
+        self.probe_sphere_diameter = QDoubleSpinBox()
+        self.probe_sphere_diameter.setRange(0.0, 1_000_000.0)
+        self.probe_sphere_diameter.setDecimals(6)
+        self.probe_sphere_diameter.setSingleStep(0.1)
+        self.probe_sphere_diameter.setValue(0.0)
+        plane_comp_layout.addWidget(QLabel("Diametro sfera"), 2, 0)
+        plane_comp_layout.addWidget(self.probe_sphere_diameter, 2, 1)
+
         self.thresholds = ThresholdsWidget()
         input_layout.addWidget(self.thresholds)
 
@@ -871,6 +901,17 @@ class MeltioFrameTool(QWidget):
         widget.y.setValue(vals[1])
         widget.z.setValue(vals[2])
 
+    def get_plane_compensation(self, plane_normal: np.ndarray) -> Tuple[np.ndarray, float, float, int]:
+        diameter = self.probe_sphere_diameter.value()
+        radius = diameter / 2.0
+        sign_by_mode = {0: 0, 1: 1, 2: -1}
+        sign = sign_by_mode.get(self.plane_comp_mode.currentIndex(), 0)
+
+        if diameter <= 0.0 or sign == 0:
+            return np.zeros(3, dtype=float), diameter, radius, 0
+
+        return sign * radius * normalize(plane_normal), diameter, radius, sign
+
     def calculate_all(self):
         try:
             hole1 = self.hole1_widget.get_result()
@@ -881,10 +922,12 @@ class MeltioFrameTool(QWidget):
                 plane.normal,
                 force_flip=self.flip_real_z.isChecked()
             )
+            plane_comp_vector, plane_comp_diameter, plane_comp_radius, plane_comp_sign = self.get_plane_compensation(Zr)
+            plane_point_used = plane.point + plane_comp_vector
 
             # Proiezioni reali
-            F1r_proj = project_point_on_plane(hole1.center_raw, plane.point, Zr)
-            F2r_proj = project_point_on_plane(hole2.center_raw, plane.point, Zr)
+            F1r_proj = project_point_on_plane(hole1.center_raw, plane_point_used, Zr)
+            F2r_proj = project_point_on_plane(hole2.center_raw, plane_point_used, Zr)
 
             real_frame = build_frame_from_holes_and_plane(F1r_proj, F2r_proj, Zr)
 
@@ -924,6 +967,8 @@ class MeltioFrameTool(QWidget):
 
             report = self.build_report(
                 hole1, hole2, plane,
+                plane_point_used, plane_comp_vector,
+                plane_comp_diameter, plane_comp_radius, plane_comp_sign,
                 F1r_proj, F2r_proj,
                 F1n_proj, F2n_proj,
                 real_frame, nominal_frame,
@@ -948,6 +993,11 @@ class MeltioFrameTool(QWidget):
         hole1: HoleInputResult,
         hole2: HoleInputResult,
         plane: PlaneFitResult,
+        plane_point_used: np.ndarray,
+        plane_comp_vector: np.ndarray,
+        plane_comp_diameter: float,
+        plane_comp_radius: float,
+        plane_comp_sign: int,
         F1r_proj: np.ndarray,
         F2r_proj: np.ndarray,
         F1n_proj: np.ndarray,
@@ -982,8 +1032,17 @@ class MeltioFrameTool(QWidget):
         lines.append(f"Foro 2 raw = {format_vec(hole2.center_raw)}")
         lines.append(f"Foro 1 projected = {format_vec(F1r_proj)}")
         lines.append(f"Foro 2 projected = {format_vec(F2r_proj)}")
-        lines.append(f"Piano reale point = {format_vec(plane.point)}")
+        lines.append(f"Piano reale point raw = {format_vec(plane.point)}")
+        lines.append(f"Piano reale point used = {format_vec(plane_point_used)}")
         lines.append(f"Piano reale normal = {format_vec(real_frame.Z)}")
+        if plane_comp_sign == 0 or plane_comp_diameter <= 0.0:
+            lines.append("Compensazione piano = nessuna")
+        else:
+            comp_label = "+r lungo Z reale" if plane_comp_sign > 0 else "-r lungo Z reale"
+            lines.append(
+                f"Compensazione piano = {comp_label}, diametro sfera={plane_comp_diameter:.6f}, "
+                f"raggio={plane_comp_radius:.6f}, vettore={format_vec(plane_comp_vector)}"
+            )
         lines.append("")
 
         lines.append("CAD NOMINAL DATA")
