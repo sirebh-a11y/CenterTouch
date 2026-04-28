@@ -296,6 +296,43 @@ def rotation_matrix_to_euler_zxy_deg(R: np.ndarray) -> Tuple[float, float, float
     return math.degrees(rz), math.degrees(rx), math.degrees(ry)
 
 
+def rotation_matrix_to_euler_yxz_deg(R: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Restituisce angoli YXZ in gradi: (Ry, Rx, Rz)
+    """
+    sx = max(-1.0, min(1.0, -R[1, 2]))
+    rx = math.asin(sx)
+    cx = math.cos(rx)
+
+    if abs(cx) > 1e-8:
+        ry = math.atan2(R[0, 2], R[2, 2])
+        rz = math.atan2(R[1, 0], R[1, 1])
+    else:
+        ry = math.atan2(-R[2, 0], R[0, 0])
+        rz = 0.0
+
+    return math.degrees(ry), math.degrees(rx), math.degrees(rz)
+
+
+def rotation_matrix_to_euler_yzx_deg(R: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Restituisce angoli YZX in gradi: (Ry, Rz, Rx)
+    """
+    sz = max(-1.0, min(1.0, R[1, 0]))
+    rz = math.asin(sz)
+    cz = math.cos(rz)
+
+    if abs(cz) > 1e-8:
+        ry = math.atan2(-R[2, 0], R[0, 0])
+        rx = math.atan2(-R[1, 2], R[1, 1])
+    else:
+        sign = 1.0 if sz >= 0.0 else -1.0
+        ry = math.atan2(sign * R[2, 1], -sign * R[0, 1])
+        rx = 0.0
+
+    return math.degrees(ry), math.degrees(rz), math.degrees(rx)
+
+
 def build_rotation_output(R: np.ndarray, mode: str) -> Tuple[str, List[Tuple[str, float]]]:
     if mode == "xyz":
         rx, ry, rz = rotation_matrix_to_euler_xyz_deg(R)
@@ -312,6 +349,14 @@ def build_rotation_output(R: np.ndarray, mode: str) -> Tuple[str, List[Tuple[str
     if mode == "zxy":
         rz, rx, ry = rotation_matrix_to_euler_zxy_deg(R)
         return "ZXY", [("Z", rz), ("X", rx), ("Y", ry)]
+
+    if mode == "yxz":
+        ry, rx, rz = rotation_matrix_to_euler_yxz_deg(R)
+        return "YXZ", [("Y", ry), ("X", rx), ("Z", rz)]
+
+    if mode == "yzx":
+        ry, rz, rx = rotation_matrix_to_euler_yzx_deg(R)
+        return "YZX", [("Y", ry), ("Z", rz), ("X", rx)]
 
     rz, ry, rx = rotation_matrix_to_euler_zyx_deg(R)
     return "ZYX", [("Z", rz), ("Y", ry), ("X", rx)]
@@ -873,6 +918,8 @@ class MeltioFrameTool(QWidget):
         self.rotation_output_mode.addItem("Swap X/Z output", "swap_xz")
         self.rotation_output_mode.addItem("XZY (avanzata)", "xzy")
         self.rotation_output_mode.addItem("ZXY (avanzata)", "zxy")
+        self.rotation_output_mode.addItem("YXZ (avanzata, poco probabile in Space)", "yxz")
+        self.rotation_output_mode.addItem("YZX (avanzata, poco probabile in Space)", "yzx")
         rotation_output_layout.addWidget(QLabel("Convenzione output"), 1, 0)
         rotation_output_layout.addWidget(self.rotation_output_mode, 1, 1)
 
