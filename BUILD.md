@@ -9,7 +9,7 @@ Obiettivo: generare un solo file `.exe`, senza cartelle o DLL da distribuire a p
 Da PowerShell nella root del progetto:
 
 ```powershell
-.\.venv\Scripts\python.exe -m nuitka main.py --onefile --onefile-no-compression --enable-plugin=pyside6 --output-dir=deployment_onefile_fast --output-filename=CenterTouch_ver3.exe --disable-cache=ccache --noinclude-qt-translations --noinclude-dlls=*.cpp.o --noinclude-dlls=*.qsb --windows-icon-from-ico=logo777.ico --include-qt-plugins=platforminputcontexts --include-data-files=logo777.ico=logo777.ico "--include-data-files=logo777_black on transparent.png=logo777_black on transparent.png" --windows-console-mode=disable
+.\.venv\Scripts\python.exe -m nuitka main.py --onefile --onefile-no-compression --enable-plugin=pyside6 --output-dir=deployment_onefile_fast --output-filename=CenterTouch_ver3.exe --disable-cache=ccache --noinclude-qt-translations --noinclude-dlls=*.cpp.o --noinclude-dlls=*.qsb --windows-icon-from-ico=logo777.ico --include-qt-plugins=platforminputcontexts --include-data-files=logo777.ico=logo777.ico "--include-data-files=logo777_black on transparent.png=logo777_black on transparent.png" --include-data-files=Wire-trading.png=Wire-trading.png --windows-console-mode=disable
 ```
 
 Output atteso:
@@ -39,6 +39,7 @@ Per un singolo file serve invece `--onefile`.
 - `--output-filename=CenterTouch_ver3.exe`: imposta il nome finale.
 - `--include-data-files=logo777.ico=logo777.ico`: include l'icona nei dati disponibili all'app.
 - `"--include-data-files=logo777_black on transparent.png=logo777_black on transparent.png"`: include il logo PNG. Le virgolette servono perche il nome file contiene spazi.
+- `--include-data-files=Wire-trading.png=Wire-trading.png`: include il logo Wire Trading.
 - `--windows-console-mode=disable`: evita la finestra console quando si avvia la GUI.
 - `--disable-cache=ccache`: evita problemi con ccache.
 
@@ -46,7 +47,7 @@ Per un singolo file serve invece `--onefile`.
 
 1. Lanciare il comando da PowerShell nella root del progetto.
 2. Usare la venv del progetto: `.\.venv\Scripts\python.exe`.
-3. Non rinominare o spostare file asset prima della build: servono `logo777.ico` e `logo777_black on transparent.png`.
+3. Non rinominare o spostare file asset prima della build: servono `logo777.ico`, `logo777_black on transparent.png` e `Wire-trading.png`.
 4. Se la build si blocca su permessi sotto `AppData\Local\Nuitka`, rilanciare PowerShell con permessi adeguati o eseguire il comando fuori da ambienti sandboxati.
 5. Se il file onefile generato pesa poche centinaia di KB, la build non e valida: e rimasto solo lo stub. Il file corretto per questa app pesa circa 135 MB.
 6. Per verificare davvero che sia onefile, copiare solo `CenterTouch_ver3.exe` in una cartella vuota e avviarlo da li.

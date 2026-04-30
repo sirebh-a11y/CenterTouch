@@ -11,7 +11,7 @@ from PySide6.QtGui import QColor, QTextCursor, QPixmap, QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QTextEdit, QFileDialog, QTableWidget,
-    QTableWidgetItem, QGroupBox, QComboBox, QDoubleSpinBox,
+    QTableWidgetItem, QGroupBox, QComboBox, QAbstractSpinBox, QDoubleSpinBox,
     QMessageBox, QCheckBox, QTabWidget, QSizePolicy, QScrollArea
 )
 
@@ -549,6 +549,18 @@ def create_empty_table(rows: int = 5) -> QTableWidget:
     return table
 
 
+class ManualDoubleSpinBox(QDoubleSpinBox):
+    def __init__(self):
+        super().__init__()
+        self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+    def stepBy(self, steps: int):
+        return
+
+
 class XYZInputRow(QWidget):
     def __init__(self, title: str):
         super().__init__()
@@ -557,9 +569,9 @@ class XYZInputRow(QWidget):
 
         layout.addWidget(QLabel(title))
 
-        self.x = QDoubleSpinBox()
-        self.y = QDoubleSpinBox()
-        self.z = QDoubleSpinBox()
+        self.x = ManualDoubleSpinBox()
+        self.y = ManualDoubleSpinBox()
+        self.z = ManualDoubleSpinBox()
         for w in (self.x, self.y, self.z):
             w.setRange(-1_000_000, 1_000_000)
             w.setDecimals(6)
@@ -715,7 +727,7 @@ class ThresholdsWidget(QGroupBox):
         ]
 
         for r, (key, label, default) in enumerate(rows):
-            sb = QDoubleSpinBox()
+            sb = ManualDoubleSpinBox()
             sb.setRange(0.0, 1_000_000.0)
             sb.setDecimals(6)
             sb.setValue(default)
@@ -752,19 +764,28 @@ class MeltioFrameTool(QWidget):
         scroll_area.setWidget(content)
         content_layout = QVBoxLayout(content)
 
+        header_logo_size = 72
         title_row = QHBoxLayout()
         logo_label = QLabel()
         logo_path = asset_path("logo777_black on transparent.png")
         logo_pixmap = QPixmap(str(logo_path))
         if not logo_pixmap.isNull():
             logo_label.setPixmap(
-                logo_pixmap.scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                logo_pixmap.scaled(header_logo_size, header_logo_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
         title = QLabel("Tool -BASIC- per centraggio CAD → reale")
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        wire_logo_label = QLabel()
+        wire_logo_path = asset_path("Wire-trading.png")
+        wire_logo_pixmap = QPixmap(str(wire_logo_path))
+        if not wire_logo_pixmap.isNull():
+            wire_logo_label.setPixmap(
+                wire_logo_pixmap.scaled(header_logo_size, header_logo_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
         title_row.addWidget(logo_label)
         title_row.addWidget(title)
         title_row.addStretch(1)
+        title_row.addWidget(wire_logo_label)
         content_layout.addLayout(title_row)
 
         instructions = QLabel(
@@ -827,7 +848,7 @@ class MeltioFrameTool(QWidget):
 
         self.nom_hole1 = XYZInputRow("Foro 1 CAD")
         self.nom_hole2 = XYZInputRow("Foro 2 CAD")
-        self.nom_plane_height = QDoubleSpinBox()
+        self.nom_plane_height = ManualDoubleSpinBox()
         self.nom_plane_height.setRange(-1_000_000, 1_000_000)
         self.nom_plane_height.setDecimals(6)
         self.nom_plane_height.setSingleStep(0.1)
@@ -874,7 +895,7 @@ class MeltioFrameTool(QWidget):
         plane_comp_layout.addWidget(QLabel("Compensazione"), 1, 0)
         plane_comp_layout.addWidget(self.plane_comp_mode, 1, 1)
 
-        self.probe_sphere_diameter = QDoubleSpinBox()
+        self.probe_sphere_diameter = ManualDoubleSpinBox()
         self.probe_sphere_diameter.setRange(0.0, 1_000_000.0)
         self.probe_sphere_diameter.setDecimals(6)
         self.probe_sphere_diameter.setSingleStep(0.1)
@@ -932,6 +953,11 @@ class MeltioFrameTool(QWidget):
         self.calc_btn.clicked.connect(self.calculate_all)
         self.save_btn.clicked.connect(self.save_txt)
         self.clear_btn.clicked.connect(self.output.clear)
+
+        footer = QLabel("This software is licensed by SiRe, VAT No. IT01314390251, for use by Wire Trading.")
+        footer.setAlignment(Qt.AlignCenter)
+        footer.setStyleSheet("color: #666; font-size: 9px;")
+        main_layout.addWidget(footer)
 
     # ---------------------------
     # Core calculation pipeline
