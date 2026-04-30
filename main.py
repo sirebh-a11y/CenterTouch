@@ -714,27 +714,32 @@ class ThresholdsWidget(QGroupBox):
 
         self.widgets = {}
         rows = [
-            ("plane_rms_warning", "RMS piano warning", 0.05),
-            ("plane_rms_critical", "RMS piano critical", 0.15),
-            ("plane_area_warning", "Area indicativa piano warning", 1.0),
-            ("hole_rms_warning", "RMS foro warning", 0.05),
-            ("hole_rms_critical", "RMS foro critical", 0.15),
-            ("hole_distance_critical", "Interasse minimo critical", 1.0),
-            ("distance_delta_warning", "Delta interasse warning", 0.20),
-            ("distance_delta_critical", "Delta interasse critical", 0.50),
-            ("xz_cross_warning", "|ZxX| warning", 0.10),
-            ("xz_cross_critical", "|ZxX| critical", 0.01),
+            ("plane_rms_warning", "Errore piano warning", 0.05, "Scostamento medio dei punti dal piano calcolato."),
+            ("plane_rms_critical", "Errore piano critical", 0.15, "Limite critico dello scostamento medio dal piano."),
+            ("plane_area_warning", "Area piano warning", 1.0, "Estensione dell'area coperta dai punti tastati sul piano."),
+            ("hole_rms_warning", "Errore foro warning", 0.05, "Scostamento medio dei punti dal cerchio calcolato."),
+            ("hole_rms_critical", "Errore foro critical", 0.15, "Limite critico dello scostamento medio dal cerchio."),
+            ("hole_distance_critical", "Interasse minimo critical", 1.0, "Distanza minima ammessa tra foro 1 e foro 2."),
+            ("distance_delta_warning", "Delta interasse warning", 0.20, "Differenza tra distanza CAD e distanza reale dei fori."),
+            ("distance_delta_critical", "Delta interasse critical", 0.50, "Limite critico della differenza CAD/reale dei fori."),
+            ("xz_cross_warning", "Ortogonalità assi (|Z x X|) warning", 0.10, "Indice di ortogonalità tra asse Z del piano e asse X dei fori."),
+            ("xz_cross_critical", "Ortogonalità assi (|Z x X|) critical", 0.01, "Limite critico dell'ortogonalità tra asse Z e asse X."),
         ]
 
-        for r, (key, label, default) in enumerate(rows):
+        for r, (key, label, default, help_text) in enumerate(rows):
             sb = ManualDoubleSpinBox()
             sb.setRange(0.0, 1_000_000.0)
             sb.setDecimals(6)
             sb.setValue(default)
             sb.setSingleStep(0.01)
+            help_label = QLabel(help_text)
+            help_label.setWordWrap(True)
+            help_label.setStyleSheet("color: #666; font-size: 10px;")
             self.widgets[key] = sb
             layout.addWidget(QLabel(label), r, 0)
             layout.addWidget(sb, r, 1)
+            layout.addWidget(help_label, r, 2)
+        layout.setColumnStretch(2, 1)
 
     def values(self) -> dict:
         return {k: w.value() for k, w in self.widgets.items()}
