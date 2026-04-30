@@ -362,6 +362,48 @@ def build_rotation_output(R: np.ndarray, mode: str) -> Tuple[str, List[Tuple[str
     return "ZYX", [("Z", rz), ("Y", ry), ("X", rx)]
 
 
+def build_angle_output_warning(rotation_mode_label: str, rotation_lines: List[Tuple[str, float]]) -> List[str]:
+    critical_axis_by_mode = {
+        "ZYX": "Y",
+        "XYZ": "Y",
+        "XZY": "Z",
+        "ZXY": "X",
+        "YXZ": "X",
+        "YZX": "Z",
+        "SWAP_XZ_OUTPUT": "Y",
+    }
+    critical_axis = critical_axis_by_mode.get(rotation_mode_label)
+    if critical_axis is None:
+        return []
+
+    angles = dict(rotation_lines)
+    angle = angles.get(critical_axis)
+    if angle is None:
+        return []
+
+    distance_from_gimbal = min(abs(angle - 90.0), abs(angle + 90.0))
+    if distance_from_gimbal > 2.0:
+        return []
+
+    title = "AVVISO FORTE ANGOLI ROTATE" if distance_from_gimbal <= 0.5 else "AVVISO ANGOLI ROTATE"
+    if rotation_mode_label == "SWAP_XZ_OUTPUT":
+        detail = (
+            f"Swap X/Z è una rimappatura speciale basata su ZYX: "
+            f"angolo Y = {angle:.6f}, vicino al gimbal lock."
+        )
+    else:
+        detail = (
+            f"Modalità {rotation_mode_label} vicina al gimbal lock: "
+            f"angolo {critical_axis} = {angle:.6f}."
+        )
+
+    return [
+        title,
+        detail,
+        "Riguarda solo i tre valori Rotate: matrice R e Translate restano validi.",
+    ]
+
+
 def homogeneous_from_rt(R: np.ndarray, t: np.ndarray) -> np.ndarray:
     T = np.eye(4)
     T[:3, :3] = R
@@ -930,13 +972,29 @@ class MeltioFrameTool(QWidget):
         rotation_output_layout = QGridLayout(rotation_output_group)
         results_layout.addWidget(rotation_output_group)
 
-        rotation_output_info = QLabel(
-            "Cambia solo la rappresentazione finale delle rotazioni.\n"
-            "Matrice R e traslazione restano invariate."
+        rotation_mode_info = QLabel(
+            "Modalità output: sceglie come scrivere la stessa rotazione nei campi Rotate X/Y/Z. "
+            "Matrice R e Translate non cambiano."
         )
-        rotation_output_info.setWordWrap(True)
-        rotation_output_info.setStyleSheet("color: #333;")
-        rotation_output_layout.addWidget(rotation_output_info, 0, 0, 1, 2)
+        rotation_mode_info.setWordWrap(True)
+        rotation_mode_info.setStyleSheet("color: #333;")
+        rotation_output_layout.addWidget(rotation_mode_info, 0, 0, 1, 2)
+
+        gimbal_info = QLabel(
+            "Gimbal lock: in alcune posizioni i tre angoli Rotate possono diventare ambigui. "
+            "Il report avvisa solo quando la modalità scelta è vicina al problema."
+        )
+        gimbal_info.setWordWrap(True)
+        gimbal_info.setStyleSheet("color: #555; font-size: 10px;")
+        rotation_output_layout.addWidget(gimbal_info, 1, 0, 1, 2)
+
+        swap_info = QLabel(
+            "Swap X/Z: opzione speciale per rimappare i campi rotazione X e Z; "
+            "non è una convenzione Euler equivalente."
+        )
+        swap_info.setWordWrap(True)
+        swap_info.setStyleSheet("color: #555; font-size: 10px;")
+        rotation_output_layout.addWidget(swap_info, 2, 0, 1, 2)
 
         self.rotation_output_mode = QComboBox()
         self.rotation_output_mode.addItem("ZYX (attuale)", "zyx")
@@ -946,8 +1004,8 @@ class MeltioFrameTool(QWidget):
         self.rotation_output_mode.addItem("ZXY (avanzata)", "zxy")
         self.rotation_output_mode.addItem("YXZ (avanzata, poco probabile in Space)", "yxz")
         self.rotation_output_mode.addItem("YZX (avanzata, poco probabile in Space)", "yzx")
-        rotation_output_layout.addWidget(QLabel("Convenzione output"), 1, 0)
-        rotation_output_layout.addWidget(self.rotation_output_mode, 1, 1)
+        rotation_output_layout.addWidget(QLabel("Convenzione output"), 3, 0)
+        rotation_output_layout.addWidget(self.rotation_output_mode, 3, 1)
 
         self.output = QTextEdit()
         self.output.setLineWrapMode(QTextEdit.NoWrap)
@@ -1127,6 +1185,7 @@ class MeltioFrameTool(QWidget):
             t = real_frame.origin - R @ nominal_frame.origin
             T = homogeneous_from_rt(R, t)
             rotation_mode_label, rotation_lines = build_rotation_output(R, self.get_rotation_output_mode())
+            angle_output_warning = build_angle_output_warning(rotation_mode_label, rotation_lines)
 
             quality = build_quality_report(
                 hole1=hole1,
@@ -1150,6 +1209,7 @@ class MeltioFrameTool(QWidget):
                 real_frame, nominal_frame,
                 R, t, T,
                 rotation_mode_label, rotation_lines,
+                angle_output_warning,
                 quality
             )
             self.output.setPlainText(report)
@@ -1185,6 +1245,7 @@ class MeltioFrameTool(QWidget):
         T: np.ndarray,
         rotation_mode_label: str,
         rotation_lines: List[Tuple[str, float]],
+        angle_output_warning: List[str],
         quality: QualityReport
     ) -> str:
         lines = []
@@ -1201,6 +1262,9 @@ class MeltioFrameTool(QWidget):
         lines.append(f"ROTATE ({rotation_mode_label})")
         for axis_label, angle_value in rotation_lines:
             lines.append(f"{axis_label} = {angle_value:.6f}")
+        if angle_output_warning:
+            lines.append("")
+            lines.extend(angle_output_warning)
         lines.append("")
 
         lines.append("REAL DATA")
