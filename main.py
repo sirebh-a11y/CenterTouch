@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QTextEdit, QFileDialog, QTableWidget,
     QTableWidgetItem, QGroupBox, QComboBox, QAbstractSpinBox, QDoubleSpinBox,
-    QMessageBox, QCheckBox, QTabWidget, QSizePolicy, QScrollArea
+    QMessageBox, QCheckBox, QTabWidget, QSizePolicy, QScrollArea, QStackedWidget
 )
 
 
@@ -1365,6 +1365,184 @@ class MeltioFrameTool(QWidget):
 
 
 # ============================================================
+# START WINDOW
+# ============================================================
+
+class StartWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        window_icon = QIcon(str(asset_path("logo777.ico")))
+        if not window_icon.isNull():
+            self.setWindowIcon(window_icon)
+        self.setWindowTitle("CenterTouch - Selezione datum")
+        self.resize(1300, 900)
+
+        self.stack = QStackedWidget()
+        self.two_holes_tool = None
+        self.cylinder_page = None
+
+        main_layout = QVBoxLayout(self)
+        main_layout.addWidget(self.stack)
+
+        self.stack.addWidget(self.build_home_page())
+
+    def build_home_page(self) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        page_layout.addWidget(scroll_area)
+
+        content = QWidget()
+        scroll_area.setWidget(content)
+        layout = QVBoxLayout(content)
+        layout.setSpacing(14)
+
+        header_logo_size = 68
+        header = QHBoxLayout()
+
+        sire_block = QVBoxLayout()
+        sire_logo = QLabel()
+        sire_logo.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        sire_pixmap = QPixmap(str(asset_path("logo777_black on transparent.png")))
+        if not sire_pixmap.isNull():
+            sire_logo.setPixmap(
+                sire_pixmap.scaled(header_logo_size, header_logo_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        sire_block.addWidget(sire_logo)
+
+        title = QLabel("Centraggio parte in Space Meltio")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-size: 22px; font-weight: bold;")
+
+        wire_block = QVBoxLayout()
+        wire_logo = QLabel()
+        wire_logo.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        wire_pixmap = QPixmap(str(asset_path("Wire-trading.png")))
+        if not wire_pixmap.isNull():
+            wire_logo.setPixmap(
+                wire_pixmap.scaled(header_logo_size, header_logo_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        wire_block.addWidget(wire_logo)
+
+        header.addLayout(sire_block, 1)
+        header.addWidget(title, 2)
+        header.addLayout(wire_block, 1)
+        layout.addLayout(header)
+
+        datum_pixmap = QPixmap(str(asset_path("datum.png")))
+        choices_row = QHBoxLayout()
+        choices_row.setSpacing(18)
+        choice_width = 300
+
+        self.two_holes_btn = self.build_choice_button("Trasforma due fori")
+        self.cylinder_btn = self.build_choice_button("Trasforma cilindro")
+        self.on_demand_btn = self.build_choice_button("On demand")
+
+        if datum_pixmap.isNull():
+            missing_label = QLabel("Immagine datum.png non trovata.")
+            missing_label.setAlignment(Qt.AlignCenter)
+            missing_label.setStyleSheet("color: #900; font-weight: bold;")
+            layout.addWidget(missing_label, 1)
+        else:
+            segment_width = datum_pixmap.width() // 3
+            buttons = [self.two_holes_btn, self.cylinder_btn, self.on_demand_btn]
+            for idx, button in enumerate(buttons):
+                column = QVBoxLayout()
+                column.setSpacing(8)
+
+                x = idx * segment_width
+                width = segment_width if idx < 2 else datum_pixmap.width() - x
+                segment = datum_pixmap.copy(x, 0, width, datum_pixmap.height())
+
+                scaled_segment = segment.scaledToWidth(choice_width, Qt.SmoothTransformation)
+
+                image_label = QLabel()
+                image_label.setAlignment(Qt.AlignCenter)
+                image_label.setFixedSize(choice_width, scaled_segment.height())
+                image_label.setPixmap(scaled_segment)
+
+                button.setFixedWidth(choice_width)
+                column.addWidget(image_label)
+                column.addWidget(button)
+                choices_row.addLayout(column)
+
+            layout.addLayout(choices_row, 1)
+
+        for button in (self.two_holes_btn, self.cylinder_btn, self.on_demand_btn):
+            button.setMinimumHeight(30)
+            button.setStyleSheet("font-size: 12px; font-weight: bold;")
+
+        self.two_holes_btn.clicked.connect(self.open_two_holes_tool)
+        self.cylinder_btn.clicked.connect(self.open_cylinder_placeholder)
+        self.on_demand_btn.clicked.connect(self.show_on_demand_message)
+
+        footer = QLabel("This software is licensed by SiRe, VAT No. IT01314390251, for use by Wire Trading.")
+        footer.setAlignment(Qt.AlignCenter)
+        footer.setStyleSheet("color: #666; font-size: 9px;")
+        layout.addWidget(footer)
+
+        return page
+
+    def build_choice_button(self, text: str) -> QPushButton:
+        button = QPushButton(text)
+        button.setMinimumHeight(30)
+        button.setStyleSheet("font-size: 12px; font-weight: bold;")
+        return button
+
+    def open_two_holes_tool(self):
+        if self.two_holes_tool is None:
+            self.two_holes_tool = MeltioFrameTool()
+            self.stack.addWidget(self.two_holes_tool)
+        self.stack.setCurrentWidget(self.two_holes_tool)
+
+    def open_cylinder_placeholder(self):
+        if self.cylinder_page is None:
+            self.cylinder_page = QWidget()
+            layout = QVBoxLayout(self.cylinder_page)
+
+            title = QLabel("Trasforma cilindro")
+            title.setAlignment(Qt.AlignCenter)
+            title.setStyleSheet("font-size: 20px; font-weight: bold;")
+
+            message = QLabel(
+                "Modulo per cilindro con foro decentrato.\n\n"
+                "Questa finestra userà una procedura dedicata, con funzionalità simili "
+                "al modulo due fori, basata sui datum del secondo schema."
+            )
+            message.setAlignment(Qt.AlignCenter)
+            message.setWordWrap(True)
+            message.setStyleSheet("font-size: 13px; color: #333;")
+
+            back_btn = QPushButton("Torna alla selezione datum")
+            back_btn.setMinimumHeight(36)
+            back_btn.clicked.connect(lambda: self.stack.setCurrentIndex(0))
+
+            layout.addStretch(1)
+            layout.addWidget(title)
+            layout.addWidget(message)
+            layout.addWidget(back_btn, alignment=Qt.AlignCenter)
+            layout.addStretch(1)
+
+            self.stack.addWidget(self.cylinder_page)
+
+        self.stack.setCurrentWidget(self.cylinder_page)
+
+    def show_on_demand_message(self):
+        QMessageBox.information(
+            self,
+            "Modulo on demand",
+            "Modulo disponibile su richiesta.\n\n"
+            "Questa configurazione datum richiede una procedura dedicata.\n"
+            "Contattare Wire Trading e SiRe per valutare l'attivazione o lo sviluppo "
+            "del modulo specifico per il componente."
+        )
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -1373,7 +1551,7 @@ def main():
     app_icon = QIcon(str(asset_path("logo777.ico")))
     if not app_icon.isNull():
         app.setWindowIcon(app_icon)
-    win = MeltioFrameTool()
+    win = StartWindow()
     win.show()
     sys.exit(app.exec())
 
