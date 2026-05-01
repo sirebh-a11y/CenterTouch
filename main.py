@@ -49,6 +49,14 @@ class HoleInputResult:
 
 
 @dataclass
+class CircleDatumInputResult:
+    center_raw: np.ndarray
+    source: str  # "points" or "center"
+    circle_fit: Optional[CircleFitResult]
+    imported_center_ignored: bool = False
+
+
+@dataclass
 class FrameResult:
     origin: np.ndarray
     R: np.ndarray
@@ -201,6 +209,29 @@ def fit_circle_3d(points: np.ndarray) -> CircleFitResult:
         max_residual=float(np.max(np.abs(residuals))),
         local_plane_normal=plane.normal,
         local_plane_point=plane.point,
+        num_points=len(points),
+    )
+
+
+def fit_circle_on_plane(points: np.ndarray, plane_point: np.ndarray, plane_normal: np.ndarray) -> CircleFitResult:
+    pts = np.asarray(points, dtype=float)
+    if len(pts) < 3:
+        raise ValueError("Servono almeno 3 punti per il fit del cerchio.")
+
+    proj_pts, pts_2d, u, v = project_points_to_plane_basis(pts, plane_point, plane_normal)
+    center_2d, radius, residuals = fit_circle_2d(pts_2d)
+    center_3d = plane_point + center_2d[0] * u + center_2d[1] * v
+
+    plane_distances = (pts - proj_pts) @ normalize(plane_normal)
+    total_residuals = np.sqrt(residuals ** 2 + plane_distances ** 2)
+
+    return CircleFitResult(
+        center_3d=center_3d,
+        radius=radius,
+        rms=float(np.sqrt(np.mean(total_residuals ** 2))),
+        max_residual=float(np.max(np.abs(total_residuals))),
+        local_plane_normal=normalize(plane_normal),
+        local_plane_point=plane_point,
         num_points=len(points),
     )
 
@@ -706,6 +737,91 @@ class HoleInputWidget(QGroupBox):
                 source="center",
                 circle_fit=None
             )
+
+
+class CircleDatumInputWidget(QGroupBox):
+    def __init__(self, title: str, instructions: str, rows: int = 8):
+        super().__init__(title)
+        layout = QVBoxLayout(self)
+
+        self.imported_center_ignored = False
+
+        self.mode = QComboBox()
+        self.mode.addItems([
+            "Punti tastati",
+            "Centro già calcolato"
+        ])
+        layout.addWidget(QLabel("Modalità input"))
+        layout.addWidget(self.mode)
+
+        info = QLabel(instructions)
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #333;")
+        layout.addWidget(info)
+
+        self.points_table = create_empty_table(rows)
+        layout.addWidget(self.points_table)
+
+        btn_row = QHBoxLayout()
+        self.add_row_btn = QPushButton("Aggiungi riga punti")
+        self.remove_row_btn = QPushButton("Rimuovi riga punti")
+        btn_row.addWidget(self.add_row_btn)
+        btn_row.addWidget(self.remove_row_btn)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        self.center_row = XYZInputRow("Centro")
+        layout.addWidget(self.center_row)
+
+        self.add_row_btn.clicked.connect(self.add_row)
+        self.remove_row_btn.clicked.connect(self.remove_row)
+        self.mode.currentIndexChanged.connect(self.update_visibility)
+        self.update_visibility()
+
+    def add_row(self):
+        self.points_table.insertRow(self.points_table.rowCount())
+
+    def remove_row(self):
+        if self.points_table.rowCount() > 1:
+            self.points_table.removeRow(self.points_table.rowCount() - 1)
+
+    def update_visibility(self):
+        is_points = self.mode.currentIndex() == 0
+        self.points_table.setVisible(is_points)
+        self.add_row_btn.setVisible(is_points)
+        self.remove_row_btn.setVisible(is_points)
+        self.center_row.setVisible(not is_points)
+
+    def set_points(self, points):
+        self.points_table.setRowCount(len(points))
+        for r, p in enumerate(points):
+            for c in range(3):
+                self.points_table.setItem(r, c, QTableWidgetItem(str(p[c])))
+
+    def set_center(self, vals):
+        self.center_row.x.setValue(vals[0])
+        self.center_row.y.setValue(vals[1])
+        self.center_row.z.setValue(vals[2])
+
+    def get_result(self, plane_point: np.ndarray, plane_normal: np.ndarray) -> CircleDatumInputResult:
+        if self.mode.currentIndex() == 0:
+            pts = read_points_from_table(self.points_table)
+            if len(pts) < 3:
+                raise ValueError(f"{self.title()}: servono almeno 3 punti.")
+            circle = fit_circle_on_plane(pts, plane_point, plane_normal)
+            return CircleDatumInputResult(
+                center_raw=circle.center_3d,
+                source="points",
+                circle_fit=circle,
+                imported_center_ignored=self.imported_center_ignored
+            )
+
+        center = self.center_row.value()
+        return CircleDatumInputResult(
+            center_raw=center,
+            source="center",
+            circle_fit=None
+        )
 
 
 class PlaneInputWidget(QGroupBox):
@@ -1365,6 +1481,649 @@ class MeltioFrameTool(QWidget):
 
 
 # ============================================================
+# CYLINDER WINDOW
+# ============================================================
+
+class CylinderFrameTool(QWidget):
+    def __init__(self):
+        super().__init__()
+        window_icon = QIcon(str(asset_path("logo777.ico")))
+        if not window_icon.isNull():
+            self.setWindowIcon(window_icon)
+        self.setWindowTitle("Tool cilindro decentrato -> Meltio Space")
+        self.resize(1300, 900)
+
+        main_layout = QVBoxLayout(self)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        main_layout.addWidget(scroll_area)
+
+        content = QWidget()
+        scroll_area.setWidget(content)
+        content_layout = QVBoxLayout(content)
+
+        header_logo_size = 72
+        title_row = QHBoxLayout()
+        logo_label = QLabel()
+        logo_pixmap = QPixmap(str(asset_path("logo777_black on transparent.png")))
+        if not logo_pixmap.isNull():
+            logo_label.setPixmap(
+                logo_pixmap.scaled(header_logo_size, header_logo_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        title = QLabel("Tool cilindro con foro decentrato")
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        wire_logo_label = QLabel()
+        wire_logo_pixmap = QPixmap(str(asset_path("Wire-trading.png")))
+        if not wire_logo_pixmap.isNull():
+            wire_logo_label.setPixmap(
+                wire_logo_pixmap.scaled(header_logo_size, header_logo_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        title_row.addWidget(logo_label)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        title_row.addWidget(wire_logo_label)
+        content_layout.addLayout(title_row)
+
+        instructions = QLabel(
+            "Riferimenti metrologici usati dal software:\n"
+            "- Origine reale: centro del cilindro esterno sul piano superiore reale\n"
+            "- Asse Z reale: normale del piano superiore tastato\n"
+            "- Asse X reale: direzione centro cilindro → datum C decentrato, proiettata sul piano superiore\n"
+            "- Asse Y reale: calcolato automaticamente (sistema destrorso)\n"
+            "- Il cilindro esterno serve a trovare il centro, non la direzione asse\n"
+            "- Output principale in stile Meltio Space: Translate / Rotate"
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("background:#f5f5f5; padding:10px; border:1px solid #ccc;")
+        content_layout.addWidget(instructions)
+
+        tabs = QTabWidget()
+        content_layout.addWidget(tabs)
+
+        input_tab = QWidget()
+        tabs.addTab(input_tab, "Input")
+        input_layout = QVBoxLayout(input_tab)
+
+        import_row = QHBoxLayout()
+        self.import_btn = QPushButton("Import TXT")
+        import_row.addWidget(self.import_btn)
+        import_row.addStretch(1)
+        input_layout.addLayout(import_row)
+
+        real_group = QGroupBox("Dati reali da tastatura")
+        real_layout = QVBoxLayout(real_group)
+        input_layout.addWidget(real_group)
+
+        self.datum_c_kind = QComboBox()
+        self.datum_c_kind.addItem("Foro decentrato / cilindro piccolo", "circle")
+        self.datum_c_kind.addItem("Piano laterale (non attivo)", "plane")
+        self.datum_c_kind.addItem("Linea / asse (non attivo)", "line")
+        self.datum_c_kind.addItem("On demand / da definire", "ondemand")
+        kind_row = QHBoxLayout()
+        kind_row.addWidget(QLabel("Tipo Datum C"))
+        kind_row.addWidget(self.datum_c_kind)
+        kind_row.addStretch(1)
+        real_layout.addLayout(kind_row)
+
+        real_split = QHBoxLayout()
+        real_layout.addLayout(real_split)
+
+        cylinder_instructions = (
+            "Metodo cilindro esterno:\n"
+            "- Inserire punti tastati sulla superficie cilindrica esterna.\n"
+            "- I punti servono a calcolare il centro del cilindro in sezione.\n"
+            "- La direzione asse non viene ricavata dal cilindro: viene presa dalla normale del piano superiore."
+        )
+        datum_c_instructions = (
+            "Metodo foro/cilindro decentrato:\n"
+            "- Preferire punti tastati se disponibili.\n"
+            "- Se sono presenti sia punti sia centro, verranno usati i punti.\n"
+            "- Questo datum blocca la rotazione attorno all'asse Z."
+        )
+
+        self.cylinder_widget = CircleDatumInputWidget("Cilindro esterno reale", cylinder_instructions, rows=8)
+        self.plane_widget = PlaneInputWidget("Piano superiore reale")
+        self.datum_c_widget = CircleDatumInputWidget("Datum C reale", datum_c_instructions, rows=8)
+        real_split.addWidget(self.cylinder_widget, 1)
+        real_split.addWidget(self.plane_widget, 1)
+        real_split.addWidget(self.datum_c_widget, 1)
+
+        cad_group = QGroupBox("Dati nominali CAD")
+        cad_layout = QVBoxLayout(cad_group)
+        input_layout.addWidget(cad_group)
+
+        cad_info = QLabel(
+            "Metodo CAD:\n"
+            "- Inserire centro cilindro nominale\n"
+            "- Inserire centro foro/cilindro decentrato nominale\n"
+            "- Inserire quota del piano superiore nominale Z\n"
+            "- L'asse cilindro nominale è assunto normale al piano Z nominale"
+        )
+        cad_info.setWordWrap(True)
+        cad_info.setStyleSheet("color: #333;")
+        cad_layout.addWidget(cad_info)
+
+        self.nom_cylinder_center = XYZInputRow("Centro cilindro CAD")
+        self.nom_datum_c_center = XYZInputRow("Centro datum C CAD")
+        self.nom_plane_height = ManualDoubleSpinBox()
+        self.nom_plane_height.setRange(-1_000_000, 1_000_000)
+        self.nom_plane_height.setDecimals(6)
+        self.nom_plane_height.setSingleStep(0.1)
+        self.nom_plane_height.setValue(0.0)
+
+        cad_layout.addWidget(self.nom_cylinder_center)
+        cad_layout.addWidget(self.nom_datum_c_center)
+
+        zrow = QHBoxLayout()
+        zrow.addWidget(QLabel("Quota piano superiore CAD (Z = h)"))
+        zrow.addWidget(self.nom_plane_height)
+        zrow.addStretch(1)
+        cad_layout.addLayout(zrow)
+
+        opt_group = QGroupBox("Opzioni")
+        opt_layout = QHBoxLayout(opt_group)
+        input_layout.addWidget(opt_group)
+
+        self.flip_real_z = QCheckBox("Inverti Z reale")
+        self.flip_nominal_z = QCheckBox("Inverti Z nominale (usa Zn = (0,0,-1))")
+        opt_layout.addWidget(self.flip_real_z)
+        opt_layout.addWidget(self.flip_nominal_z)
+        opt_layout.addStretch(1)
+
+        plane_comp_group = QGroupBox("Compensazione piano tastato")
+        plane_comp_layout = QGridLayout(plane_comp_group)
+        input_layout.addWidget(plane_comp_group)
+
+        plane_comp_info = QLabel(
+            "Applica la compensazione del raggio sfera solo al piano superiore reale.\n"
+            "Per cilindro esterno e datum C si mantiene la stessa logica del modulo base."
+        )
+        plane_comp_info.setWordWrap(True)
+        plane_comp_info.setStyleSheet("color: #333;")
+        plane_comp_layout.addWidget(plane_comp_info, 0, 0, 1, 2)
+
+        self.plane_comp_mode = QComboBox()
+        self.plane_comp_mode.addItems([
+            "Nessuna",
+            "Piano reale nel verso di Z reale",
+            "Piano reale nel verso opposto a Z reale",
+        ])
+        plane_comp_layout.addWidget(QLabel("Compensazione"), 1, 0)
+        plane_comp_layout.addWidget(self.plane_comp_mode, 1, 1)
+
+        self.probe_sphere_diameter = ManualDoubleSpinBox()
+        self.probe_sphere_diameter.setRange(0.0, 1_000_000.0)
+        self.probe_sphere_diameter.setDecimals(6)
+        self.probe_sphere_diameter.setSingleStep(0.1)
+        self.probe_sphere_diameter.setValue(0.0)
+        plane_comp_layout.addWidget(QLabel("Diametro sfera"), 2, 0)
+        plane_comp_layout.addWidget(self.probe_sphere_diameter, 2, 1)
+
+        self.thresholds = ThresholdsWidget()
+        input_layout.addWidget(self.thresholds)
+
+        results_tab = QWidget()
+        tabs.addTab(results_tab, "Risultati")
+        results_layout = QVBoxLayout(results_tab)
+
+        btn_row = QHBoxLayout()
+        self.calc_btn = QPushButton("Calcola trasformazione")
+        self.save_btn = QPushButton("Salva TXT")
+        self.clear_btn = QPushButton("Pulisci output")
+        btn_row.addWidget(self.calc_btn)
+        btn_row.addWidget(self.save_btn)
+        btn_row.addWidget(self.clear_btn)
+        btn_row.addStretch(1)
+        results_layout.addLayout(btn_row)
+
+        rotation_output_group = QGroupBox("Output rotazioni")
+        rotation_output_layout = QGridLayout(rotation_output_group)
+        results_layout.addWidget(rotation_output_group)
+
+        rotation_mode_info = QLabel(
+            "Modalità output: sceglie come scrivere la stessa rotazione nei campi Rotate X/Y/Z. "
+            "Matrice R e Translate non cambiano."
+        )
+        rotation_mode_info.setWordWrap(True)
+        rotation_mode_info.setStyleSheet("color: #333;")
+        rotation_output_layout.addWidget(rotation_mode_info, 0, 0, 1, 2)
+
+        self.rotation_output_mode = QComboBox()
+        self.rotation_output_mode.addItem("ZYX (attuale)", "zyx")
+        self.rotation_output_mode.addItem("XYZ", "xyz")
+        self.rotation_output_mode.addItem("Swap X/Z output", "swap_xz")
+        self.rotation_output_mode.addItem("XZY (avanzata)", "xzy")
+        self.rotation_output_mode.addItem("ZXY (avanzata)", "zxy")
+        self.rotation_output_mode.addItem("YXZ (avanzata, poco probabile in Space)", "yxz")
+        self.rotation_output_mode.addItem("YZX (avanzata, poco probabile in Space)", "yzx")
+        rotation_output_layout.addWidget(QLabel("Convenzione output"), 1, 0)
+        rotation_output_layout.addWidget(self.rotation_output_mode, 1, 1)
+
+        self.output = QTextEdit()
+        self.output.setLineWrapMode(QTextEdit.NoWrap)
+        self.output.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        results_layout.addWidget(self.output)
+
+        self.import_btn.clicked.connect(self.import_txt)
+        self.calc_btn.clicked.connect(self.calculate_all)
+        self.save_btn.clicked.connect(self.save_txt)
+        self.clear_btn.clicked.connect(self.output.clear)
+
+    def import_txt(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Apri file TXT", "", "Text Files (*.txt)")
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            self.parse_txt_lines(lines)
+        except Exception as e:
+            QMessageBox.critical(self, "Import TXT", str(e))
+
+    def parse_txt_lines(self, lines):
+        mode = None
+        cylinder_pts = []
+        cylinder_center = None
+        plane_pts = []
+        datum_pts = []
+        datum_center = None
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            upper_line = line.upper()
+            if line.startswith("#") or upper_line in {
+                "CILINDRO ESTERNO - PUNTI",
+                "CILINDRO ESTERNO - PUNTI TASTATI",
+                "CILINDRO ESTERNO - CENTRO",
+                "PIANO SUPERIORE",
+                "PIANO SUPERIORE - PUNTI",
+                "FORO DECENTRATO - PUNTI",
+                "FORO DECENTRATO - PUNTI TASTATI",
+                "FORO DECENTRATO - CENTRO",
+                "CAD NOMINALE CILINDRO",
+            }:
+                if "CILINDRO ESTERNO" in upper_line and "PUNTI" in upper_line:
+                    mode = "cylinder_pts"
+                elif "CILINDRO ESTERNO" in upper_line and "CENTRO" in upper_line:
+                    mode = "cylinder_center"
+                elif "PIANO SUPERIORE" in upper_line:
+                    mode = "plane"
+                elif "FORO DECENTRATO" in upper_line and "PUNTI" in upper_line:
+                    mode = "datum_pts"
+                elif "FORO DECENTRATO" in upper_line and "CENTRO" in upper_line:
+                    mode = "datum_center"
+                elif "CAD NOMINALE CILINDRO" in upper_line:
+                    mode = "cad"
+                continue
+
+            if line.startswith("---"):
+                mode = None
+                continue
+
+            if "=" in line:
+                key, val = line.split("=", 1)
+                nums = [parse_float_input(x) for x in val.replace(",", " ").split()]
+                key_upper = key.strip().upper()
+                if key_upper == "CENTRO_CILINDRO":
+                    self.nom_cylinder_center.x.setValue(nums[0])
+                    self.nom_cylinder_center.y.setValue(nums[1])
+                    self.nom_cylinder_center.z.setValue(nums[2])
+                elif key_upper in {"CENTRO_FORO", "CENTRO_DATUM_C"}:
+                    self.nom_datum_c_center.x.setValue(nums[0])
+                    self.nom_datum_c_center.y.setValue(nums[1])
+                    self.nom_datum_c_center.z.setValue(nums[2])
+                elif key_upper in {"Z_PIANO", "Z"}:
+                    self.nom_plane_height.setValue(nums[0])
+                continue
+
+            parts = line.split()
+            if len(parts) == 3:
+                vals = [parse_float_input(p) for p in parts]
+                if mode == "cylinder_pts":
+                    cylinder_pts.append(vals)
+                elif mode == "cylinder_center":
+                    cylinder_center = vals
+                elif mode == "plane":
+                    plane_pts.append(vals)
+                elif mode == "datum_pts":
+                    datum_pts.append(vals)
+                elif mode == "datum_center":
+                    datum_center = vals
+
+        self.plane_widget.table.setRowCount(len(plane_pts))
+        for r, p in enumerate(plane_pts):
+            for c in range(3):
+                self.plane_widget.table.setItem(r, c, QTableWidgetItem(str(p[c])))
+
+        self.cylinder_widget.imported_center_ignored = False
+        if cylinder_pts:
+            self.cylinder_widget.mode.setCurrentIndex(0)
+            self.cylinder_widget.set_points(cylinder_pts)
+            if cylinder_center:
+                self.cylinder_widget.set_center(cylinder_center)
+                self.cylinder_widget.imported_center_ignored = True
+        elif cylinder_center:
+            self.cylinder_widget.mode.setCurrentIndex(1)
+            self.cylinder_widget.set_center(cylinder_center)
+
+        self.datum_c_widget.imported_center_ignored = False
+        if datum_pts:
+            self.datum_c_widget.mode.setCurrentIndex(0)
+            self.datum_c_widget.set_points(datum_pts)
+            if datum_center:
+                self.datum_c_widget.set_center(datum_center)
+                self.datum_c_widget.imported_center_ignored = True
+        elif datum_center:
+            self.datum_c_widget.mode.setCurrentIndex(1)
+            self.datum_c_widget.set_center(datum_center)
+
+    def get_plane_compensation(self, plane_normal: np.ndarray) -> Tuple[np.ndarray, float, float, int]:
+        diameter = self.probe_sphere_diameter.value()
+        radius = diameter / 2.0
+        sign_by_mode = {0: 0, 1: 1, 2: -1}
+        sign = sign_by_mode.get(self.plane_comp_mode.currentIndex(), 0)
+
+        if diameter <= 0.0 or sign == 0:
+            return np.zeros(3, dtype=float), diameter, radius, 0
+
+        return sign * radius * normalize(plane_normal), diameter, radius, sign
+
+    def get_rotation_output_mode(self) -> str:
+        return self.rotation_output_mode.currentData() or "zyx"
+
+    def calculate_all(self):
+        try:
+            if self.datum_c_kind.currentData() != "circle":
+                raise ValueError(
+                    "Questa variante Datum C richiede una procedura dedicata. "
+                    "Per ora usare 'Foro decentrato / cilindro piccolo'."
+                )
+
+            plane = self.plane_widget.get_result()
+            Zr = orient_real_plane_normal(
+                plane.normal,
+                force_flip=self.flip_real_z.isChecked()
+            )
+            plane_comp_vector, plane_comp_diameter, plane_comp_radius, plane_comp_sign = self.get_plane_compensation(Zr)
+            plane_point_used = plane.point + plane_comp_vector
+
+            cylinder = self.cylinder_widget.get_result(plane_point_used, Zr)
+            datum_c = self.datum_c_widget.get_result(plane_point_used, Zr)
+
+            origin_real = project_point_on_plane(cylinder.center_raw, plane_point_used, Zr)
+            datum_real = project_point_on_plane(datum_c.center_raw, plane_point_used, Zr)
+            real_frame = build_frame_from_holes_and_plane(origin_real, datum_real, Zr)
+
+            Cn = self.nom_cylinder_center.value()
+            Dn = self.nom_datum_c_center.value()
+            h = self.nom_plane_height.value()
+            Zn = np.array([0.0, 0.0, -1.0 if self.flip_nominal_z.isChecked() else 1.0])
+
+            origin_nom = np.array([Cn[0], Cn[1], h], dtype=float)
+            datum_nom = np.array([Dn[0], Dn[1], h], dtype=float)
+            nominal_frame = build_frame_from_holes_and_plane(origin_nom, datum_nom, Zn)
+
+            R = real_frame.R @ nominal_frame.R.T
+            t = real_frame.origin - R @ nominal_frame.origin
+            T = homogeneous_from_rt(R, t)
+            rotation_mode_label, rotation_lines = build_rotation_output(R, self.get_rotation_output_mode())
+            angle_output_warning = build_angle_output_warning(rotation_mode_label, rotation_lines)
+
+            quality = self.build_quality_report(
+                cylinder, datum_c, plane,
+                origin_real, datum_real,
+                origin_nom, datum_nom,
+                real_frame.Z, real_frame.X
+            )
+
+            report = self.build_report(
+                cylinder, datum_c, plane,
+                plane_point_used, plane_comp_vector,
+                plane_comp_diameter, plane_comp_radius, plane_comp_sign,
+                origin_real, datum_real,
+                origin_nom, datum_nom,
+                real_frame, nominal_frame,
+                R, t, T,
+                rotation_mode_label, rotation_lines,
+                angle_output_warning,
+                quality
+            )
+            self.output.setPlainText(report)
+            self.colorize_output_status(quality.status)
+
+        except ValueError as e:
+            msg = "ERRORE DI INPUT\n\n" + str(e)
+            self.output.setPlainText(msg)
+            self.colorize_output_status("CRITICAL")
+        except Exception as e:
+            msg = "ERRORE DI CALCOLO\n\n" + str(e) + "\n\n" + traceback.format_exc()
+            self.output.setPlainText(msg)
+            self.colorize_output_status("CRITICAL")
+
+    def build_quality_report(
+        self,
+        cylinder: CircleDatumInputResult,
+        datum_c: CircleDatumInputResult,
+        plane: PlaneFitResult,
+        origin_real: np.ndarray,
+        datum_real: np.ndarray,
+        origin_nom: np.ndarray,
+        datum_nom: np.ndarray,
+        Zr: np.ndarray,
+        Xr: np.ndarray
+    ) -> QualityReport:
+        thresholds = self.thresholds.values()
+        lines = []
+        severity = 0
+
+        lines.append(f"Piano superiore: RMS={plane.rms:.6f}, Max={plane.max_residual:.6f}, AreaIndic={plane.area_indicator:.6f}")
+        if plane.rms > thresholds["plane_rms_critical"]:
+            lines.append("CRITICAL: errore RMS piano superiore oltre soglia critica.")
+            severity = max(severity, 2)
+        elif plane.rms > thresholds["plane_rms_warning"]:
+            lines.append("WARNING: errore RMS piano superiore oltre soglia warning.")
+            severity = max(severity, 1)
+
+        if plane.area_indicator < thresholds["plane_area_warning"]:
+            lines.append("WARNING: punti piano poco distribuiti, normale potenzialmente instabile.")
+            severity = max(severity, 1)
+
+        for label, feature in [("Cilindro esterno", cylinder), ("Datum C", datum_c)]:
+            if feature.source == "points" and feature.circle_fit is not None:
+                cf = feature.circle_fit
+                lines.append(
+                    f"{label}: fit cerchio RMS={cf.rms:.6f}, Max={cf.max_residual:.6f}, "
+                    f"Raggio={cf.radius:.6f}, N={cf.num_points}"
+                )
+                if cf.rms > thresholds["hole_rms_critical"]:
+                    lines.append(f"CRITICAL: fit {label} oltre soglia critica.")
+                    severity = max(severity, 2)
+                elif cf.rms > thresholds["hole_rms_warning"]:
+                    lines.append(f"WARNING: fit {label} oltre soglia warning.")
+                    severity = max(severity, 1)
+                if feature.imported_center_ignored:
+                    lines.append(f"WARNING: {label} aveva anche un centro importato, ignorato perché sono presenti punti.")
+                    severity = max(severity, 1)
+            else:
+                lines.append(f"{label}: centro inserito direttamente, nessun fit disponibile.")
+                lines.append(f"WARNING: affidabilità di {label} dipende dal dato esterno.")
+                severity = max(severity, 1)
+
+        d_real = float(np.linalg.norm(datum_real - origin_real))
+        d_nom = float(np.linalg.norm(datum_nom - origin_nom))
+        diff_d = abs(d_real - d_nom)
+        lines.append(f"Distanza centro cilindro -> Datum C nominale={d_nom:.6f}, reale={d_real:.6f}, delta={diff_d:.6f}")
+
+        if d_real < thresholds["hole_distance_critical"]:
+            lines.append("CRITICAL: Datum C troppo vicino al centro cilindro, frame instabile.")
+            severity = max(severity, 2)
+
+        if diff_d > thresholds["distance_delta_critical"]:
+            lines.append("CRITICAL: differenza distanza nominale/reale oltre soglia critica.")
+            severity = max(severity, 2)
+        elif diff_d > thresholds["distance_delta_warning"]:
+            lines.append("WARNING: differenza distanza nominale/reale oltre soglia warning.")
+            severity = max(severity, 1)
+
+        cross_mag = float(np.linalg.norm(np.cross(Zr, Xr)))
+        lines.append(f"Stabilità X vs Z: |Z x X|={cross_mag:.6f}")
+        if cross_mag < thresholds["xz_cross_critical"]:
+            lines.append("CRITICAL: asse X quasi parallelo a Z.")
+            severity = max(severity, 2)
+        elif cross_mag < thresholds["xz_cross_warning"]:
+            lines.append("WARNING: asse X vicino al parallelismo con Z.")
+            severity = max(severity, 1)
+
+        status = "OK" if severity == 0 else ("WARNING" if severity == 1 else "CRITICAL")
+        return QualityReport(status=status, lines=lines)
+
+    def build_report(
+        self,
+        cylinder: CircleDatumInputResult,
+        datum_c: CircleDatumInputResult,
+        plane: PlaneFitResult,
+        plane_point_used: np.ndarray,
+        plane_comp_vector: np.ndarray,
+        plane_comp_diameter: float,
+        plane_comp_radius: float,
+        plane_comp_sign: int,
+        origin_real: np.ndarray,
+        datum_real: np.ndarray,
+        origin_nom: np.ndarray,
+        datum_nom: np.ndarray,
+        real_frame: FrameResult,
+        nominal_frame: FrameResult,
+        R: np.ndarray,
+        t: np.ndarray,
+        T: np.ndarray,
+        rotation_mode_label: str,
+        rotation_lines: List[Tuple[str, float]],
+        angle_output_warning: List[str],
+        quality: QualityReport
+    ) -> str:
+        lines = []
+
+        lines.append("OUTPUT FOR MELTIO SPACE")
+        lines.append("")
+        lines.append("PART TRANSFORM")
+        lines.append("")
+        lines.append("TRANSLATE")
+        lines.append(f"X = {t[0]:.6f}")
+        lines.append(f"Y = {t[1]:.6f}")
+        lines.append(f"Z = {t[2]:.6f}")
+        lines.append("")
+        lines.append(f"ROTATE ({rotation_mode_label})")
+        for axis_label, angle_value in rotation_lines:
+            lines.append(f"{axis_label} = {angle_value:.6f}")
+        if angle_output_warning:
+            lines.append("")
+            lines.extend(angle_output_warning)
+        lines.append("")
+
+        lines.append("REAL DATA")
+        lines.append(f"Centro cilindro raw = {format_vec(cylinder.center_raw)}")
+        lines.append(f"Centro Datum C raw = {format_vec(datum_c.center_raw)}")
+        lines.append(f"Origine reale projected = {format_vec(origin_real)}")
+        lines.append(f"Datum C projected = {format_vec(datum_real)}")
+        lines.append(f"Piano superiore point raw = {format_vec(plane.point)}")
+        lines.append(f"Piano superiore point used = {format_vec(plane_point_used)}")
+        lines.append(f"Piano superiore normal = {format_vec(real_frame.Z)}")
+        if plane_comp_sign == 0 or plane_comp_diameter <= 0.0:
+            lines.append("Compensazione piano = nessuna")
+        else:
+            comp_label = "+r lungo Z reale" if plane_comp_sign > 0 else "-r lungo Z reale"
+            lines.append(
+                f"Compensazione piano = {comp_label}, diametro sfera={plane_comp_diameter:.6f}, "
+                f"raggio={plane_comp_radius:.6f}, vettore={format_vec(plane_comp_vector)}"
+            )
+        lines.append("")
+
+        lines.append("CAD NOMINAL DATA")
+        lines.append(f"Origine nominale = {format_vec(origin_nom)}")
+        lines.append(f"Datum C nominale = {format_vec(datum_nom)}")
+        lines.append(f"Nominal Z axis = {format_vec(nominal_frame.Z)}")
+        lines.append("")
+
+        lines.append("REAL FRAME AXES")
+        lines.append(f"X_dir = {format_vec(real_frame.X)}")
+        lines.append(f"Y_dir = {format_vec(real_frame.Y)}")
+        lines.append(f"Z_dir = {format_vec(real_frame.Z)}")
+        lines.append("")
+
+        lines.append("NOMINAL FRAME AXES")
+        lines.append(f"Xn_dir = {format_vec(nominal_frame.X)}")
+        lines.append(f"Yn_dir = {format_vec(nominal_frame.Y)}")
+        lines.append(f"Zn_dir = {format_vec(nominal_frame.Z)}")
+        lines.append("")
+
+        lines.append("ROTATION MATRIX R")
+        lines.append(format_matrix(R))
+        lines.append("")
+        lines.append("HOMOGENEOUS MATRIX T")
+        lines.append(format_matrix(T))
+        lines.append("")
+
+        lines.append("FIT DETAILS")
+        lines.append(f"Piano superiore RMS = {plane.rms:.6f}")
+        lines.append(f"Piano superiore Max residual = {plane.max_residual:.6f}")
+        lines.append(f"Piano superiore Area indicator = {plane.area_indicator:.6f}")
+
+        for label, feature in [("Cilindro esterno", cylinder), ("Datum C", datum_c)]:
+            if feature.source == "points" and feature.circle_fit is not None:
+                cf = feature.circle_fit
+                lines.append(
+                    f"{label}: fit da punti, center={format_vec(cf.center_3d)}, "
+                    f"radius={cf.radius:.6f}, RMS={cf.rms:.6f}, Max={cf.max_residual:.6f}"
+                )
+            else:
+                lines.append(f"{label}: centro inserito direttamente")
+
+        lines.append("")
+        lines.append(f"QUALITY STATUS = {quality.status}")
+        for line in quality.lines:
+            lines.append(line)
+
+        return "\n".join(lines)
+
+    def colorize_output_status(self, status: str):
+        if status == "OK":
+            color = "#e9f9e9"
+        elif status == "WARNING":
+            color = "#fff7dd"
+        else:
+            color = "#ffe5e5"
+        self.output.setStyleSheet(f"background:{color}; font-family: Consolas, monospace; font-size: 12px;")
+
+    def save_txt(self):
+        content = self.output.toPlainText().strip()
+        if not content:
+            QMessageBox.warning(self, "Salvataggio", "Nessun contenuto da salvare.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Salva output",
+            "",
+            "Text Files (*.txt)"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            QMessageBox.information(self, "Salvataggio", "File salvato correttamente.")
+        except Exception as e:
+            QMessageBox.critical(self, "Errore salvataggio", str(e))
+
+
+# ============================================================
 # START WINDOW
 # ============================================================
 
@@ -1501,32 +2260,7 @@ class StartWindow(QWidget):
 
     def open_cylinder_placeholder(self):
         if self.cylinder_page is None:
-            self.cylinder_page = QWidget()
-            layout = QVBoxLayout(self.cylinder_page)
-
-            title = QLabel("Trasforma cilindro")
-            title.setAlignment(Qt.AlignCenter)
-            title.setStyleSheet("font-size: 20px; font-weight: bold;")
-
-            message = QLabel(
-                "Modulo per cilindro con foro decentrato.\n\n"
-                "Questa finestra userà una procedura dedicata, con funzionalità simili "
-                "al modulo due fori, basata sui datum del secondo schema."
-            )
-            message.setAlignment(Qt.AlignCenter)
-            message.setWordWrap(True)
-            message.setStyleSheet("font-size: 13px; color: #333;")
-
-            back_btn = QPushButton("Torna alla selezione datum")
-            back_btn.setMinimumHeight(36)
-            back_btn.clicked.connect(lambda: self.stack.setCurrentIndex(0))
-
-            layout.addStretch(1)
-            layout.addWidget(title)
-            layout.addWidget(message)
-            layout.addWidget(back_btn, alignment=Qt.AlignCenter)
-            layout.addStretch(1)
-
+            self.cylinder_page = CylinderFrameTool()
             self.stack.addWidget(self.cylinder_page)
 
         self.stack.setCurrentWidget(self.cylinder_page)
