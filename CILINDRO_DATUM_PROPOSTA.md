@@ -307,6 +307,33 @@ Direzione nominale Datum C:
 
 Il software usa questa direzione per costruire il frame nominale.
 
+Limite attuale:
+
+```text
+La scelta +X / -X / +Y / -Y funziona solo se il piano laterale CAD e parallelo agli assi principali.
+```
+
+Se il piano laterale e inclinato rispetto agli assi CAD, manca ancora la gestione dedicata.
+
+Soluzioni possibili da discutere prima di implementare:
+
+1. **Angolo CAD nel piano XY**
+   - L'utente inserisce l'angolo della normale del piano rispetto a `+X`.
+   - Esempio: `45 gradi` significa normale a meta tra `+X` e `+Y`.
+   - E piu semplice per l'utente se il CAD mostra chiaramente l'angolo.
+
+2. **Vettore CAD manuale**
+   - L'utente inserisce la normale CAD come `X Y Z`.
+   - Esempio: `0.707 0.707 0`.
+   - E piu generale, ma piu facile da sbagliare.
+
+Raccomandazione provvisoria:
+
+```text
+Prima di aggiungere codice, scegliere una sola soluzione finale tra Angolo CAD e Vettore CAD manuale.
+Per uso officina/robot, Angolo CAD nel piano XY sembra la scelta piu semplice se il datum e sempre sul piano superiore.
+```
+
 #### Testo guida utente
 
 ```text
@@ -382,6 +409,33 @@ Vettore linea CAD = X Y Z
 ```
 
 Per la prima implementazione e meglio usare la tendina `+X / -X / +Y / -Y`, per evitare errori di inserimento vettore.
+
+Limite attuale:
+
+```text
+La scelta +X / -X / +Y / -Y funziona solo se la linea CAD e parallela agli assi principali.
+```
+
+Se la linea e inclinata rispetto agli assi CAD, manca ancora la gestione dedicata.
+
+Soluzioni possibili da discutere prima di implementare:
+
+1. **Angolo CAD nel piano XY**
+   - L'utente inserisce l'angolo della linea rispetto a `+X`.
+   - Esempio: `30 gradi` significa linea inclinata di 30 gradi rispetto a `+X`.
+   - E semplice se la linea e nel piano superiore o viene comunque usata solo come direzione proiettata.
+
+2. **Vettore CAD manuale**
+   - L'utente inserisce la direzione CAD come `X Y Z`.
+   - Esempio: `0.866 0.500 0`.
+   - E piu generale, ma piu delicato.
+
+Raccomandazione provvisoria:
+
+```text
+Prima di aggiungere codice, discutere quale input finale adottare.
+Per la prima versione completa, Angolo CAD nel piano XY e probabilmente piu chiaro; Vettore CAD manuale puo restare modalita avanzata.
+```
 
 #### Testo guida utente
 
