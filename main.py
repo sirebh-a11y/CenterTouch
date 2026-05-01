@@ -57,6 +57,15 @@ class CircleDatumInputResult:
 
 
 @dataclass
+class LineFitResult:
+    point: np.ndarray
+    direction: np.ndarray
+    rms: float
+    max_residual: float
+    num_points: int
+
+
+@dataclass
 class FrameResult:
     origin: np.ndarray
     R: np.ndarray
@@ -234,6 +243,67 @@ def fit_circle_on_plane(points: np.ndarray, plane_point: np.ndarray, plane_norma
         local_plane_point=plane_point,
         num_points=len(points),
     )
+
+
+def fit_line(points: np.ndarray) -> LineFitResult:
+    pts = np.asarray(points, dtype=float)
+    if len(pts) < 2:
+        raise ValueError("Servono almeno 2 punti per la linea.")
+
+    centroid = pts.mean(axis=0)
+    if len(pts) == 2:
+        direction = normalize(pts[1] - pts[0])
+    else:
+        A = pts - centroid
+        _, _, vh = np.linalg.svd(A, full_matrices=False)
+        direction = normalize(vh[0])
+
+    rel = pts - centroid
+    cross_dist = np.linalg.norm(np.cross(rel, direction), axis=1)
+
+    return LineFitResult(
+        point=centroid,
+        direction=direction,
+        rms=float(np.sqrt(np.mean(cross_dist ** 2))),
+        max_residual=float(np.max(cross_dist)),
+        num_points=len(points),
+    )
+
+
+def project_direction_to_plane(direction: np.ndarray, plane_normal: np.ndarray) -> np.ndarray:
+    n = normalize(plane_normal)
+    d = np.asarray(direction, dtype=float)
+    projected = d - np.dot(d, n) * n
+    return normalize(projected)
+
+
+def build_frame_from_origin_x_and_z(origin: np.ndarray, x_direction: np.ndarray, z_direction: np.ndarray) -> FrameResult:
+    Z = normalize(z_direction)
+    X = project_direction_to_plane(x_direction, Z)
+
+    cross_mag = np.linalg.norm(np.cross(Z, X))
+    if cross_mag < 1e-6:
+        raise ValueError("Asse X quasi parallelo a Z: frame non stabile.")
+
+    Y = normalize(np.cross(Z, X))
+    X = normalize(np.cross(Y, Z))
+
+    X, Y, Z = ensure_right_handed(X, Y, Z)
+    R = np.column_stack((X, Y, Z))
+
+    return FrameResult(origin=origin, R=R, X=X, Y=Y, Z=Z)
+
+
+def nominal_axis_from_key(key: str) -> np.ndarray:
+    axes = {
+        "+x": np.array([1.0, 0.0, 0.0]),
+        "-x": np.array([-1.0, 0.0, 0.0]),
+        "+y": np.array([0.0, 1.0, 0.0]),
+        "-y": np.array([0.0, -1.0, 0.0]),
+    }
+    if key not in axes:
+        raise ValueError("Direzione CAD Datum C non valida.")
+    return axes[key]
 
 
 def build_frame_from_holes_and_plane(F1: np.ndarray, F2: np.ndarray, plane_normal: np.ndarray) -> FrameResult:
@@ -822,6 +892,48 @@ class CircleDatumInputWidget(QGroupBox):
             source="center",
             circle_fit=None
         )
+
+
+class LineInputWidget(QGroupBox):
+    def __init__(self, title: str):
+        super().__init__(title)
+        layout = QVBoxLayout(self)
+
+        info = QLabel(
+            "Metodo linea / asse:\n"
+            "- Inserire almeno 2 punti sul riferimento lineare.\n"
+            "- Con 2 punti viene usata la direzione punto 1 -> punto 2.\n"
+            "- Con più punti viene calcolata la linea media.\n"
+            "- La direzione viene proiettata sul piano superiore."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #333;")
+        layout.addWidget(info)
+
+        self.table = create_empty_table(4)
+        layout.addWidget(self.table)
+
+        btn_row = QHBoxLayout()
+        self.add_row_btn = QPushButton("Aggiungi riga linea")
+        self.remove_row_btn = QPushButton("Rimuovi riga linea")
+        btn_row.addWidget(self.add_row_btn)
+        btn_row.addWidget(self.remove_row_btn)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        self.add_row_btn.clicked.connect(self.add_row)
+        self.remove_row_btn.clicked.connect(self.remove_row)
+
+    def add_row(self):
+        self.table.insertRow(self.table.rowCount())
+
+    def remove_row(self):
+        if self.table.rowCount() > 1:
+            self.table.removeRow(self.table.rowCount() - 1)
+
+    def get_result(self) -> LineFitResult:
+        pts = read_points_from_table(self.table)
+        return fit_line(pts)
 
 
 class PlaneInputWidget(QGroupBox):
@@ -1558,8 +1670,8 @@ class CylinderFrameTool(QWidget):
 
         self.datum_c_kind = QComboBox()
         self.datum_c_kind.addItem("Foro decentrato / cilindro piccolo", "circle")
-        self.datum_c_kind.addItem("Piano laterale (non attivo)", "plane")
-        self.datum_c_kind.addItem("Linea / asse (non attivo)", "line")
+        self.datum_c_kind.addItem("Piano laterale", "plane")
+        self.datum_c_kind.addItem("Linea / asse", "line")
         self.datum_c_kind.addItem("On demand / da definire", "ondemand")
         kind_row = QHBoxLayout()
         kind_row.addWidget(QLabel("Tipo Datum C"))
@@ -1586,9 +1698,13 @@ class CylinderFrameTool(QWidget):
         self.cylinder_widget = CircleDatumInputWidget("Cilindro esterno reale", cylinder_instructions, rows=8)
         self.plane_widget = PlaneInputWidget("Piano superiore reale")
         self.datum_c_widget = CircleDatumInputWidget("Datum C reale", datum_c_instructions, rows=8)
+        self.datum_c_plane_widget = PlaneInputWidget("Piano laterale Datum C reale")
+        self.datum_c_line_widget = LineInputWidget("Linea / asse Datum C reale")
         real_split.addWidget(self.cylinder_widget, 1)
         real_split.addWidget(self.plane_widget, 1)
         real_split.addWidget(self.datum_c_widget, 1)
+        real_split.addWidget(self.datum_c_plane_widget, 1)
+        real_split.addWidget(self.datum_c_line_widget, 1)
 
         cad_group = QGroupBox("Dati nominali CAD")
         cad_layout = QVBoxLayout(cad_group)
@@ -1597,7 +1713,8 @@ class CylinderFrameTool(QWidget):
         cad_info = QLabel(
             "Metodo CAD:\n"
             "- Inserire centro cilindro nominale\n"
-            "- Inserire centro foro/cilindro decentrato nominale\n"
+            "- Se Datum C è foro/cilindro: inserire centro foro/cilindro decentrato nominale\n"
+            "- Se Datum C è piano/linea: scegliere la direzione CAD nominale (+X, -X, +Y, -Y)\n"
             "- Inserire quota del piano superiore nominale Z\n"
             "- L'asse cilindro nominale è assunto normale al piano Z nominale"
         )
@@ -1607,6 +1724,17 @@ class CylinderFrameTool(QWidget):
 
         self.nom_cylinder_center = XYZInputRow("Centro cilindro CAD")
         self.nom_datum_c_center = XYZInputRow("Centro datum C CAD")
+        self.nom_datum_c_direction_row = QWidget()
+        direction_layout = QHBoxLayout(self.nom_datum_c_direction_row)
+        direction_layout.setContentsMargins(0, 0, 0, 0)
+        direction_layout.addWidget(QLabel("Direzione CAD Datum C"))
+        self.nom_datum_c_direction = QComboBox()
+        self.nom_datum_c_direction.addItem("+X CAD", "+x")
+        self.nom_datum_c_direction.addItem("-X CAD", "-x")
+        self.nom_datum_c_direction.addItem("+Y CAD", "+y")
+        self.nom_datum_c_direction.addItem("-Y CAD", "-y")
+        direction_layout.addWidget(self.nom_datum_c_direction)
+        direction_layout.addStretch(1)
         self.nom_plane_height = ManualDoubleSpinBox()
         self.nom_plane_height.setRange(-1_000_000, 1_000_000)
         self.nom_plane_height.setDecimals(6)
@@ -1615,6 +1743,7 @@ class CylinderFrameTool(QWidget):
 
         cad_layout.addWidget(self.nom_cylinder_center)
         cad_layout.addWidget(self.nom_datum_c_center)
+        cad_layout.addWidget(self.nom_datum_c_direction_row)
 
         zrow = QHBoxLayout()
         zrow.addWidget(QLabel("Quota piano superiore CAD (Z = h)"))
@@ -1628,8 +1757,10 @@ class CylinderFrameTool(QWidget):
 
         self.flip_real_z = QCheckBox("Inverti Z reale")
         self.flip_nominal_z = QCheckBox("Inverti Z nominale (usa Zn = (0,0,-1))")
+        self.invert_datum_c_direction = QCheckBox("Inverti direzione Datum C reale")
         opt_layout.addWidget(self.flip_real_z)
         opt_layout.addWidget(self.flip_nominal_z)
+        opt_layout.addWidget(self.invert_datum_c_direction)
         opt_layout.addStretch(1)
 
         plane_comp_group = QGroupBox("Compensazione piano tastato")
@@ -1710,6 +1841,17 @@ class CylinderFrameTool(QWidget):
         self.calc_btn.clicked.connect(self.calculate_all)
         self.save_btn.clicked.connect(self.save_txt)
         self.clear_btn.clicked.connect(self.output.clear)
+        self.datum_c_kind.currentIndexChanged.connect(self.update_datum_c_visibility)
+        self.update_datum_c_visibility()
+
+    def update_datum_c_visibility(self):
+        mode = self.datum_c_kind.currentData()
+        self.datum_c_widget.setVisible(mode == "circle")
+        self.datum_c_plane_widget.setVisible(mode == "plane")
+        self.datum_c_line_widget.setVisible(mode == "line")
+        self.nom_datum_c_center.setVisible(mode == "circle")
+        self.nom_datum_c_direction_row.setVisible(mode in {"plane", "line"})
+        self.invert_datum_c_direction.setVisible(mode in {"plane", "line"})
 
     def import_txt(self):
         path, _ = QFileDialog.getOpenFileName(self, "Apri file TXT", "", "Text Files (*.txt)")
@@ -1730,6 +1872,8 @@ class CylinderFrameTool(QWidget):
         plane_pts = []
         datum_pts = []
         datum_center = None
+        lateral_plane_pts = []
+        line_pts = []
 
         for raw_line in lines:
             line = raw_line.strip()
@@ -1746,6 +1890,10 @@ class CylinderFrameTool(QWidget):
                 "FORO DECENTRATO - PUNTI",
                 "FORO DECENTRATO - PUNTI TASTATI",
                 "FORO DECENTRATO - CENTRO",
+                "PIANO LATERALE DATUM C - PUNTI",
+                "PIANO LATERALE - PUNTI",
+                "LINEA DATUM C - PUNTI",
+                "LINEA - PUNTI",
                 "CAD NOMINALE CILINDRO",
             }:
                 if "CILINDRO ESTERNO" in upper_line and "PUNTI" in upper_line:
@@ -1758,6 +1906,12 @@ class CylinderFrameTool(QWidget):
                     mode = "datum_pts"
                 elif "FORO DECENTRATO" in upper_line and "CENTRO" in upper_line:
                     mode = "datum_center"
+                elif "PIANO LATERALE" in upper_line and "PUNTI" in upper_line:
+                    mode = "lateral_plane"
+                    self.datum_c_kind.setCurrentIndex(self.datum_c_kind.findData("plane"))
+                elif "LINEA" in upper_line and "PUNTI" in upper_line:
+                    mode = "line"
+                    self.datum_c_kind.setCurrentIndex(self.datum_c_kind.findData("line"))
                 elif "CAD NOMINALE CILINDRO" in upper_line:
                     mode = "cad"
                 continue
@@ -1768,8 +1922,22 @@ class CylinderFrameTool(QWidget):
 
             if "=" in line:
                 key, val = line.split("=", 1)
-                nums = [parse_float_input(x) for x in val.replace(",", " ").split()]
                 key_upper = key.strip().upper()
+                if key_upper in {"DIREZIONE_DATUM_C", "DIREZIONE_CAD_DATUM_C"}:
+                    direction_value = val.strip().lower().replace(" ", "")
+                    if direction_value in {"+x", "x"}:
+                        self.nom_datum_c_direction.setCurrentIndex(self.nom_datum_c_direction.findData("+x"))
+                    elif direction_value == "-x":
+                        self.nom_datum_c_direction.setCurrentIndex(self.nom_datum_c_direction.findData("-x"))
+                    elif direction_value in {"+y", "y"}:
+                        self.nom_datum_c_direction.setCurrentIndex(self.nom_datum_c_direction.findData("+y"))
+                    elif direction_value == "-y":
+                        self.nom_datum_c_direction.setCurrentIndex(self.nom_datum_c_direction.findData("-y"))
+                    else:
+                        raise ValueError("DIREZIONE_DATUM_C deve essere +X, -X, +Y o -Y.")
+                    continue
+
+                nums = [parse_float_input(x) for x in val.replace(",", " ").split()]
                 if key_upper == "CENTRO_CILINDRO":
                     self.nom_cylinder_center.x.setValue(nums[0])
                     self.nom_cylinder_center.y.setValue(nums[1])
@@ -1795,6 +1963,10 @@ class CylinderFrameTool(QWidget):
                     datum_pts.append(vals)
                 elif mode == "datum_center":
                     datum_center = vals
+                elif mode == "lateral_plane":
+                    lateral_plane_pts.append(vals)
+                elif mode == "line":
+                    line_pts.append(vals)
 
         self.plane_widget.table.setRowCount(len(plane_pts))
         for r, p in enumerate(plane_pts):
@@ -1823,6 +1995,20 @@ class CylinderFrameTool(QWidget):
             self.datum_c_widget.mode.setCurrentIndex(1)
             self.datum_c_widget.set_center(datum_center)
 
+        if lateral_plane_pts:
+            self.datum_c_kind.setCurrentIndex(self.datum_c_kind.findData("plane"))
+            self.datum_c_plane_widget.table.setRowCount(len(lateral_plane_pts))
+            for r, p in enumerate(lateral_plane_pts):
+                for c in range(3):
+                    self.datum_c_plane_widget.table.setItem(r, c, QTableWidgetItem(str(p[c])))
+
+        if line_pts:
+            self.datum_c_kind.setCurrentIndex(self.datum_c_kind.findData("line"))
+            self.datum_c_line_widget.table.setRowCount(len(line_pts))
+            for r, p in enumerate(line_pts):
+                for c in range(3):
+                    self.datum_c_line_widget.table.setItem(r, c, QTableWidgetItem(str(p[c])))
+
     def get_plane_compensation(self, plane_normal: np.ndarray) -> Tuple[np.ndarray, float, float, int]:
         diameter = self.probe_sphere_diameter.value()
         radius = diameter / 2.0
@@ -1839,12 +2025,7 @@ class CylinderFrameTool(QWidget):
 
     def calculate_all(self):
         try:
-            if self.datum_c_kind.currentData() != "circle":
-                raise ValueError(
-                    "Questa variante Datum C richiede una procedura dedicata. "
-                    "Per ora usare 'Foro decentrato / cilindro piccolo'."
-                )
-
+            datum_mode = self.datum_c_kind.currentData()
             plane = self.plane_widget.get_result()
             Zr = orient_real_plane_normal(
                 plane.normal,
@@ -1854,20 +2035,55 @@ class CylinderFrameTool(QWidget):
             plane_point_used = plane.point + plane_comp_vector
 
             cylinder = self.cylinder_widget.get_result(plane_point_used, Zr)
-            datum_c = self.datum_c_widget.get_result(plane_point_used, Zr)
-
             origin_real = project_point_on_plane(cylinder.center_raw, plane_point_used, Zr)
-            datum_real = project_point_on_plane(datum_c.center_raw, plane_point_used, Zr)
-            real_frame = build_frame_from_holes_and_plane(origin_real, datum_real, Zr)
 
             Cn = self.nom_cylinder_center.value()
-            Dn = self.nom_datum_c_center.value()
             h = self.nom_plane_height.value()
             Zn = np.array([0.0, 0.0, -1.0 if self.flip_nominal_z.isChecked() else 1.0])
-
             origin_nom = np.array([Cn[0], Cn[1], h], dtype=float)
-            datum_nom = np.array([Dn[0], Dn[1], h], dtype=float)
-            nominal_frame = build_frame_from_holes_and_plane(origin_nom, datum_nom, Zn)
+
+            datum_c = None
+            lateral_plane = None
+            line_fit = None
+
+            if datum_mode == "circle":
+                datum_c = self.datum_c_widget.get_result(plane_point_used, Zr)
+                datum_real = project_point_on_plane(datum_c.center_raw, plane_point_used, Zr)
+                real_frame = build_frame_from_holes_and_plane(origin_real, datum_real, Zr)
+
+                Dn = self.nom_datum_c_center.value()
+                datum_nom = np.array([Dn[0], Dn[1], h], dtype=float)
+                nominal_frame = build_frame_from_holes_and_plane(origin_nom, datum_nom, Zn)
+
+            elif datum_mode == "plane":
+                lateral_plane = self.datum_c_plane_widget.get_result()
+                x_real = project_direction_to_plane(lateral_plane.normal, Zr)
+                if self.invert_datum_c_direction.isChecked():
+                    x_real = -x_real
+                real_frame = build_frame_from_origin_x_and_z(origin_real, x_real, Zr)
+                datum_real = origin_real + real_frame.X
+
+                x_nom = nominal_axis_from_key(self.nom_datum_c_direction.currentData() or "+x")
+                nominal_frame = build_frame_from_origin_x_and_z(origin_nom, x_nom, Zn)
+                datum_nom = origin_nom + nominal_frame.X
+
+            elif datum_mode == "line":
+                line_fit = self.datum_c_line_widget.get_result()
+                x_real = project_direction_to_plane(line_fit.direction, Zr)
+                if self.invert_datum_c_direction.isChecked():
+                    x_real = -x_real
+                real_frame = build_frame_from_origin_x_and_z(origin_real, x_real, Zr)
+                datum_real = origin_real + real_frame.X
+
+                x_nom = nominal_axis_from_key(self.nom_datum_c_direction.currentData() or "+x")
+                nominal_frame = build_frame_from_origin_x_and_z(origin_nom, x_nom, Zn)
+                datum_nom = origin_nom + nominal_frame.X
+
+            else:
+                raise ValueError(
+                    "Questa variante Datum C richiede una procedura dedicata. "
+                    "Contattare Wire Trading e SiRe per definire la strategia di tastatura."
+                )
 
             R = real_frame.R @ nominal_frame.R.T
             t = real_frame.origin - R @ nominal_frame.origin
@@ -1876,14 +2092,14 @@ class CylinderFrameTool(QWidget):
             angle_output_warning = build_angle_output_warning(rotation_mode_label, rotation_lines)
 
             quality = self.build_quality_report(
-                cylinder, datum_c, plane,
+                datum_mode, cylinder, datum_c, lateral_plane, line_fit, plane,
                 origin_real, datum_real,
                 origin_nom, datum_nom,
                 real_frame.Z, real_frame.X
             )
 
             report = self.build_report(
-                cylinder, datum_c, plane,
+                datum_mode, cylinder, datum_c, lateral_plane, line_fit, plane,
                 plane_point_used, plane_comp_vector,
                 plane_comp_diameter, plane_comp_radius, plane_comp_sign,
                 origin_real, datum_real,
@@ -1908,8 +2124,11 @@ class CylinderFrameTool(QWidget):
 
     def build_quality_report(
         self,
+        datum_mode: str,
         cylinder: CircleDatumInputResult,
-        datum_c: CircleDatumInputResult,
+        datum_c: Optional[CircleDatumInputResult],
+        lateral_plane: Optional[PlaneFitResult],
+        line_fit: Optional[LineFitResult],
         plane: PlaneFitResult,
         origin_real: np.ndarray,
         datum_real: np.ndarray,
@@ -1934,7 +2153,11 @@ class CylinderFrameTool(QWidget):
             lines.append("WARNING: punti piano poco distribuiti, normale potenzialmente instabile.")
             severity = max(severity, 1)
 
-        for label, feature in [("Cilindro esterno", cylinder), ("Datum C", datum_c)]:
+        circle_features = [("Cilindro esterno", cylinder)]
+        if datum_mode == "circle" and datum_c is not None:
+            circle_features.append(("Datum C", datum_c))
+
+        for label, feature in circle_features:
             if feature.source == "points" and feature.circle_fit is not None:
                 cf = feature.circle_fit
                 lines.append(
@@ -1955,21 +2178,64 @@ class CylinderFrameTool(QWidget):
                 lines.append(f"WARNING: affidabilità di {label} dipende dal dato esterno.")
                 severity = max(severity, 1)
 
-        d_real = float(np.linalg.norm(datum_real - origin_real))
-        d_nom = float(np.linalg.norm(datum_nom - origin_nom))
-        diff_d = abs(d_real - d_nom)
-        lines.append(f"Distanza centro cilindro -> Datum C nominale={d_nom:.6f}, reale={d_real:.6f}, delta={diff_d:.6f}")
+        if datum_mode == "plane" and lateral_plane is not None:
+            lines.append(
+                f"Piano laterale Datum C: RMS={lateral_plane.rms:.6f}, "
+                f"Max={lateral_plane.max_residual:.6f}, AreaIndic={lateral_plane.area_indicator:.6f}"
+            )
+            if lateral_plane.rms > thresholds["plane_rms_critical"]:
+                lines.append("CRITICAL: errore RMS piano laterale oltre soglia critica.")
+                severity = max(severity, 2)
+            elif lateral_plane.rms > thresholds["plane_rms_warning"]:
+                lines.append("WARNING: errore RMS piano laterale oltre soglia warning.")
+                severity = max(severity, 1)
 
-        if d_real < thresholds["hole_distance_critical"]:
-            lines.append("CRITICAL: Datum C troppo vicino al centro cilindro, frame instabile.")
-            severity = max(severity, 2)
+            normal_parallel_z = abs(float(np.dot(normalize(lateral_plane.normal), normalize(Zr))))
+            lines.append(f"Piano laterale vs Z: |n laterale dot Z|={normal_parallel_z:.6f}")
+            if normal_parallel_z > 0.95:
+                lines.append("CRITICAL: piano laterale quasi parallelo al piano superiore, direzione X instabile.")
+                severity = max(severity, 2)
+            elif normal_parallel_z > 0.85:
+                lines.append("WARNING: normale piano laterale poco inclinata rispetto a Z.")
+                severity = max(severity, 1)
 
-        if diff_d > thresholds["distance_delta_critical"]:
-            lines.append("CRITICAL: differenza distanza nominale/reale oltre soglia critica.")
-            severity = max(severity, 2)
-        elif diff_d > thresholds["distance_delta_warning"]:
-            lines.append("WARNING: differenza distanza nominale/reale oltre soglia warning.")
-            severity = max(severity, 1)
+        if datum_mode == "line" and line_fit is not None:
+            lines.append(
+                f"Linea Datum C: RMS={line_fit.rms:.6f}, Max={line_fit.max_residual:.6f}, "
+                f"N={line_fit.num_points}"
+            )
+            if line_fit.rms > thresholds["hole_rms_critical"]:
+                lines.append("CRITICAL: fit linea Datum C oltre soglia critica.")
+                severity = max(severity, 2)
+            elif line_fit.rms > thresholds["hole_rms_warning"]:
+                lines.append("WARNING: fit linea Datum C oltre soglia warning.")
+                severity = max(severity, 1)
+
+            line_parallel_z = abs(float(np.dot(normalize(line_fit.direction), normalize(Zr))))
+            lines.append(f"Linea Datum C vs Z: |direzione linea dot Z|={line_parallel_z:.6f}")
+            if line_parallel_z > 0.95:
+                lines.append("CRITICAL: linea quasi parallela a Z, proiezione sul piano superiore instabile.")
+                severity = max(severity, 2)
+            elif line_parallel_z > 0.85:
+                lines.append("WARNING: linea molto inclinata rispetto al piano superiore.")
+                severity = max(severity, 1)
+
+        if datum_mode == "circle":
+            d_real = float(np.linalg.norm(datum_real - origin_real))
+            d_nom = float(np.linalg.norm(datum_nom - origin_nom))
+            diff_d = abs(d_real - d_nom)
+            lines.append(f"Distanza centro cilindro -> Datum C nominale={d_nom:.6f}, reale={d_real:.6f}, delta={diff_d:.6f}")
+
+            if d_real < thresholds["hole_distance_critical"]:
+                lines.append("CRITICAL: Datum C troppo vicino al centro cilindro, frame instabile.")
+                severity = max(severity, 2)
+
+            if diff_d > thresholds["distance_delta_critical"]:
+                lines.append("CRITICAL: differenza distanza nominale/reale oltre soglia critica.")
+                severity = max(severity, 2)
+            elif diff_d > thresholds["distance_delta_warning"]:
+                lines.append("WARNING: differenza distanza nominale/reale oltre soglia warning.")
+                severity = max(severity, 1)
 
         cross_mag = float(np.linalg.norm(np.cross(Zr, Xr)))
         lines.append(f"Stabilità X vs Z: |Z x X|={cross_mag:.6f}")
@@ -1985,8 +2251,11 @@ class CylinderFrameTool(QWidget):
 
     def build_report(
         self,
+        datum_mode: str,
         cylinder: CircleDatumInputResult,
-        datum_c: CircleDatumInputResult,
+        datum_c: Optional[CircleDatumInputResult],
+        lateral_plane: Optional[PlaneFitResult],
+        line_fit: Optional[LineFitResult],
         plane: PlaneFitResult,
         plane_point_used: np.ndarray,
         plane_comp_vector: np.ndarray,
@@ -2028,9 +2297,18 @@ class CylinderFrameTool(QWidget):
 
         lines.append("REAL DATA")
         lines.append(f"Centro cilindro raw = {format_vec(cylinder.center_raw)}")
-        lines.append(f"Centro Datum C raw = {format_vec(datum_c.center_raw)}")
         lines.append(f"Origine reale projected = {format_vec(origin_real)}")
-        lines.append(f"Datum C projected = {format_vec(datum_real)}")
+        if datum_mode == "circle" and datum_c is not None:
+            lines.append(f"Centro Datum C raw = {format_vec(datum_c.center_raw)}")
+            lines.append(f"Datum C projected = {format_vec(datum_real)}")
+        elif datum_mode == "plane" and lateral_plane is not None:
+            lines.append("Datum C mode = piano laterale")
+            lines.append(f"Piano laterale point = {format_vec(lateral_plane.point)}")
+            lines.append(f"Piano laterale normal raw = {format_vec(lateral_plane.normal)}")
+        elif datum_mode == "line" and line_fit is not None:
+            lines.append("Datum C mode = linea / asse")
+            lines.append(f"Linea point = {format_vec(line_fit.point)}")
+            lines.append(f"Linea direction raw = {format_vec(line_fit.direction)}")
         lines.append(f"Piano superiore point raw = {format_vec(plane.point)}")
         lines.append(f"Piano superiore point used = {format_vec(plane_point_used)}")
         lines.append(f"Piano superiore normal = {format_vec(real_frame.Z)}")
@@ -2046,7 +2324,10 @@ class CylinderFrameTool(QWidget):
 
         lines.append("CAD NOMINAL DATA")
         lines.append(f"Origine nominale = {format_vec(origin_nom)}")
-        lines.append(f"Datum C nominale = {format_vec(datum_nom)}")
+        if datum_mode == "circle":
+            lines.append(f"Datum C nominale = {format_vec(datum_nom)}")
+        else:
+            lines.append(f"Direzione Datum C nominale = {format_vec(nominal_frame.X)}")
         lines.append(f"Nominal Z axis = {format_vec(nominal_frame.Z)}")
         lines.append("")
 
@@ -2074,7 +2355,11 @@ class CylinderFrameTool(QWidget):
         lines.append(f"Piano superiore Max residual = {plane.max_residual:.6f}")
         lines.append(f"Piano superiore Area indicator = {plane.area_indicator:.6f}")
 
-        for label, feature in [("Cilindro esterno", cylinder), ("Datum C", datum_c)]:
+        circle_features = [("Cilindro esterno", cylinder)]
+        if datum_mode == "circle" and datum_c is not None:
+            circle_features.append(("Datum C", datum_c))
+
+        for label, feature in circle_features:
             if feature.source == "points" and feature.circle_fit is not None:
                 cf = feature.circle_fit
                 lines.append(
@@ -2083,6 +2368,17 @@ class CylinderFrameTool(QWidget):
                 )
             else:
                 lines.append(f"{label}: centro inserito direttamente")
+
+        if datum_mode == "plane" and lateral_plane is not None:
+            lines.append(
+                f"Piano laterale Datum C: normal={format_vec(lateral_plane.normal)}, "
+                f"RMS={lateral_plane.rms:.6f}, Max={lateral_plane.max_residual:.6f}"
+            )
+        elif datum_mode == "line" and line_fit is not None:
+            lines.append(
+                f"Linea Datum C: direction={format_vec(line_fit.direction)}, "
+                f"RMS={line_fit.rms:.6f}, Max={line_fit.max_residual:.6f}, N={line_fit.num_points}"
+            )
 
         lines.append("")
         lines.append(f"QUALITY STATUS = {quality.status}")

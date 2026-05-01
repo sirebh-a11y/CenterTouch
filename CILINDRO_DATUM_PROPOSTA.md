@@ -247,6 +247,164 @@ Questa variante datum richiede una procedura dedicata.
 Per ora usare Foro decentrato / cilindro piccolo, oppure contattare Wire Trading e SiRe per definire la strategia di tastatura.
 ```
 
+## Varianti Datum C da aggiungere
+
+Le varianti devono mantenere la stessa struttura del modulo cilindro:
+
+```text
+O = centro cilindro esterno sul piano superiore
+Z = normale piano superiore
+X = definito dal Datum C scelto
+Y = Z x X
+```
+
+Quindi cambia solo il modo in cui viene costruita la direzione `X`.
+
+### Variante 1 - Piano laterale
+
+Il Datum C e un piano laterale tastato.
+
+#### Input reale
+
+L'utente inserisce punti tastati sul piano laterale.
+
+Il software:
+
+1. fa il fit del piano laterale;
+2. prende la normale del piano laterale;
+3. proietta la normale sul piano superiore, quindi sul piano perpendicolare a `Z reale`;
+4. normalizza la direzione;
+5. usa quella direzione per costruire l'asse `X reale`.
+
+Formula concettuale:
+
+```text
+n_laterale = normale fit piano laterale
+X reale = proiezione di n_laterale sul piano normale a Z reale
+```
+
+Serve una opzione utente:
+
+```text
+Inverti direzione piano laterale
+```
+
+Motivo: la normale di un piano ha sempre due versi possibili. Il verso corretto dipende da come si vuole orientare il frame pezzo.
+
+#### Input CAD
+
+Per la prima versione non serve far inserire un piano CAD completo.
+
+L'utente deve scegliere quale direzione nominale rappresenta quel piano laterale:
+
+```text
+Direzione nominale Datum C:
+- +X CAD
+- -X CAD
+- +Y CAD
+- -Y CAD
+```
+
+Il software usa questa direzione per costruire il frame nominale.
+
+#### Testo guida utente
+
+```text
+Metodo piano laterale:
+- Inserire punti tastati su una superficie laterale del pezzo.
+- La normale del piano laterale definisce la direzione angolare attorno a Z.
+- Se l'asse risulta girato di 180 gradi, usare Inverti direzione piano laterale.
+- Nel CAD selezionare se quel piano corrisponde a +X, -X, +Y o -Y.
+```
+
+#### Controlli qualita
+
+Il report deve includere:
+
+- RMS fit piano laterale;
+- max residual piano laterale;
+- angolo tra normale piano laterale e `Z reale`;
+- warning se il piano laterale e quasi parallelo al piano superiore;
+- warning se la proiezione della normale laterale sul piano superiore e troppo piccola.
+
+### Variante 2 - Linea / asse da punti
+
+Il Datum C e una linea reale tastata o una direzione derivata da punti.
+
+Non include, in questa fase, il fit asse foro/cilindro su piu sezioni. Quella sara una variante successiva.
+
+#### Input reale
+
+L'utente inserisce almeno 2 punti su una linea, spigolo, guida, scanalatura o riferimento direzionale.
+
+Il software:
+
+1. legge i punti linea;
+2. se sono 2 punti, usa la direzione punto 1 -> punto 2;
+3. se sono piu di 2 punti, fa un fit linea con PCA;
+4. proietta la direzione sul piano superiore;
+5. normalizza la direzione;
+6. usa quella direzione come `X reale`.
+
+Formula concettuale:
+
+```text
+d_linea = direzione fit linea
+X reale = proiezione di d_linea sul piano normale a Z reale
+```
+
+Serve una opzione utente:
+
+```text
+Inverti direzione linea
+```
+
+Motivo: anche una linea ha due versi possibili.
+
+#### Input CAD
+
+Per la prima versione ci sono due modi possibili.
+
+Modo semplice consigliato:
+
+```text
+Direzione nominale Datum C:
+- +X CAD
+- -X CAD
+- +Y CAD
+- -Y CAD
+```
+
+Modo avanzato futuro:
+
+```text
+Vettore linea CAD = X Y Z
+```
+
+Per la prima implementazione e meglio usare la tendina `+X / -X / +Y / -Y`, per evitare errori di inserimento vettore.
+
+#### Testo guida utente
+
+```text
+Metodo linea / asse:
+- Inserire almeno 2 punti sul riferimento lineare.
+- Con 2 punti viene usata la direzione punto 1 -> punto 2.
+- Con piu punti viene calcolata la linea media.
+- La direzione viene proiettata sul piano superiore.
+- Se l'asse risulta girato di 180 gradi, usare Inverti direzione linea.
+- Nel CAD selezionare se quella linea corrisponde a +X, -X, +Y o -Y.
+```
+
+#### Controlli qualita
+
+Il report deve includere:
+
+- numero punti linea;
+- RMS o scostamento massimo dalla linea fit;
+- warning se i punti sono troppo vicini tra loro;
+- warning se la linea e quasi parallela a `Z reale`;
+- warning se la proiezione della linea sul piano superiore e troppo piccola.
+
 ## Formato TXT proposto
 
 Il formato deve restare vicino al file KUKA gia visto:
